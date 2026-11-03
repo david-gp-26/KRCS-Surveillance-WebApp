@@ -9,6 +9,9 @@
   "file",
   "extension",
   "version",
+  "document_family",
+  "supersedes",
+  "superseded_by",
   "approval_status",
   "approved_by",
   "approved_on",
@@ -27,7 +30,11 @@
   "index_section",
   "status",
   "chunks",
-  "error"
+  "error",
+  "governance_section",
+  "content_hash",
+  "approved_hash",
+  "governance_note"
  ],
  "fields": [
   {
@@ -53,6 +60,27 @@
    "fieldname": "version",
    "fieldtype": "Data",
    "label": "Version"
+  },
+  {
+   "fieldname": "document_family",
+   "fieldtype": "Data",
+   "label": "Document Family",
+   "read_only": 1,
+   "description": "All versions of the same document share a family. Approving one version retires the others."
+  },
+  {
+   "fieldname": "supersedes",
+   "fieldtype": "Link",
+   "options": "Knowledge Document",
+   "label": "Supersedes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "superseded_by",
+   "fieldtype": "Link",
+   "options": "Knowledge Document",
+   "label": "Superseded By",
+   "read_only": 1
   },
   {
    "fieldname": "col1",
@@ -173,10 +201,34 @@
    "fieldname": "expiry_date",
    "fieldtype": "Date",
    "label": "Expiry Date"
+  },
+  {
+   "fieldname": "governance_section",
+   "fieldtype": "Section Break",
+   "label": "Governance"
+  },
+  {
+   "fieldname": "content_hash",
+   "fieldtype": "Data",
+   "label": "Content Hash (SHA-256)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_hash",
+   "fieldtype": "Data",
+   "label": "Approved Hash (SHA-256)",
+   "read_only": 1,
+   "description": "The exact file that was approved. Re-indexing refuses a different file."
+  },
+  {
+   "fieldname": "governance_note",
+   "fieldtype": "Small Text",
+   "label": "Governance Note",
+   "read_only": 1
   }
  ],
  "links": [],
- "modified": "2026-11-03 12:00:00.000000",
+ "modified": "2026-11-03 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "Knowledge Document",

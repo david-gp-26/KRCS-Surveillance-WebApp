@@ -919,8 +919,8 @@ async function kbRequest(method, params = {}, httpMethod = 'GET') {
 
 export const getKbDocuments = () => kbRequest('list_documents')
 
-export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }) =>
-  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }, 'POST')
+export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes }) =>
+  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes }, 'POST')
 
 export const updateKbDocument = (name, { category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }) =>
   kbRequest('update_document', { name, category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }, 'POST')

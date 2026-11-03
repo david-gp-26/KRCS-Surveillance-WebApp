@@ -116,11 +116,19 @@ class TestKBAudience(FrappeTestCase):
 			kb.update_document(self.docs["chw"], audience_class="Everyone")
 
 	def test_reclassifying_moves_the_document(self):
+		def approve():
+			doc = frappe.get_doc(kb.DOCTYPE, self.docs["chw"])
+			doc.approval_status = "Approved"
+			doc.save(ignore_permissions=True)
+			kb._sync_access(doc)
 		kb.update_document(self.docs["chw"], audience_class="Professional")
+		approve()   # (a reclassified Approved document returns to Draft until approved again: test_kb_governance)
 		try:
 			self.assertNotIn("chw", self._docs(CHP))
+			self.assertIn("chw", self._docs(OFFICER))
 		finally:
 			kb.update_document(self.docs["chw"], audience_class="Community Health Worker")
+			approve()
 		self.assertIn("chw", self._docs(CHP))
 
 	# ---- public answers: verbatim template, never generated ----

@@ -18,6 +18,7 @@ import {
   MoreHorizontal,
   Loader2,
   AlertTriangle,
+  CopyPlus,
 } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
 import { KB_CATEGORIES, KB_WORKSPACE_LIMIT_BYTES } from '../data/mockKnowledgeBase'
@@ -43,6 +44,11 @@ const AUDIENCE_CLASSES = [
   { value: 'Restricted', label: 'Restricted', help: 'Only users allowed to see restricted content.' },
 ]
 const DEFAULT_AUDIENCE_CLASS = 'Community Health Worker'
+const VERSION_RE = /^v\d+(\.\d+){0,2}$/
+function nextVersion(v) {
+  const m = /^v(\d+)/.exec(v || '')
+  return m ? `v${Number(m[1]) + 1}.0` : 'v2.0'
+}
 const AUDIENCE_SHORT = { Public: 'Public', 'Community Health Worker': 'CHW', Professional: 'Professional', Restricted: 'Restricted' }
 const ACCEPTED = ['pdf', 'docx', 'txt', 'md']
 const MAX_BYTES = 25 * 1024 * 1024
@@ -231,6 +237,10 @@ function StatusBadge({ doc }) {
       {a === 'approved' && doc.approvedBy && doc.status === 'indexed' && !f.expired && (
         <span className="text-[11px] text-gray-400">by {doc.approvedBy}</span>
       )}
+      {doc.supersededBy && <span className="text-[11px] text-gray-500">Replaced by {doc.supersededBy}</span>}
+      {doc.governanceNote && a === 'draft' && (
+        <span className="text-[11px] text-amber-700 max-w-[200px] truncate" title={doc.governanceNote}>Needs approval again</span>
+      )}
       {doc.status === 'failed' && doc.error && (
         <span className="text-[11px] text-red-700 max-w-[180px] truncate" title={doc.error}>{doc.error}</span>
       )}
@@ -361,7 +371,7 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
 
 const EMPTY_OPTIONS = { diseases: [], language: 'English', regions: [ALL_REGIONS], effectiveFrom: '', reviewDate: '', expiryDate: '', audienceClass: DEFAULT_AUDIENCE_CLASS, sensitivity: 'Standard' }
 
-function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOptions, diseaseNames, onUploaded }) {
+function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOptions, diseaseNames, onUploaded, supersedes = null }) {
   const [files, setFiles] = useState([])
   const [category, setCategory] = useState(KB_CATEGORIES[0])
   const [applyTo, setApplyTo] = useState([ALL_ROLES])
@@ -370,7 +380,26 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
   const [progress, setProgress] = useState(null)
   const [errors, setErrors] = useState([])
   const fileInputRef = useRef(null)
-  const dateError = optionsDateError(opts)
+  const [version, setVersion] = useState('v1.0')
+  const versionError = version && !VERSION_RE.test(version.trim()) ? 'Version must look like v1, v1.2 or v1.2.3.' : ''
+  const dateError = optionsDateError(opts) || versionError
+
+  // a new version starts from the current version's details; it is a Draft until someone approves it
+  useEffect(() => {
+    if (!open) return
+    if (supersedes) {
+      setCategory(supersedes.category || KB_CATEGORIES[0])
+      setApplyTo(supersedes.appliedTo?.length ? supersedes.appliedTo : [ALL_ROLES])
+      setOpts({
+        ...EMPTY_OPTIONS, diseases: supersedes.diseases || [], language: supersedes.language || 'English',
+        regions: supersedes.regions?.length ? supersedes.regions : [ALL_REGIONS],
+        audienceClass: supersedes.audienceClass || DEFAULT_AUDIENCE_CLASS, sensitivity: supersedes.sensitivity || 'Standard',
+      })
+      setVersion(nextVersion(supersedes.version))
+    } else {
+      setVersion('v1.0')
+    }
+  }, [open, supersedes])
 
   useEffect(() => {
     if (!open) return
@@ -388,11 +417,11 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
   }
 
   function addFiles(fileList) {
-    const list = Array.from(fileList || [])
+    const list = Array.from(fileList || []).slice(0, supersedes ? 1 : undefined)
     const bad = list.filter((f) => !ACCEPTED.includes((f.name.split('.').pop() || '').toLowerCase()) || f.size > MAX_BYTES)
     setErrors(bad.map((f) => `${f.name}: only PDF, Word, TXT or Markdown up to 25 MB`))
     const ok = list.filter((f) => !bad.includes(f))
-    if (ok.length) setFiles((prev) => [...prev, ...ok])
+    if (ok.length) setFiles((prev) => (supersedes ? ok.slice(0, 1) : [...prev, ...ok]))
   }
 
   async function upload() {
@@ -414,6 +443,8 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
           effective_from: opts.effectiveFrom,
           audience_class: opts.audienceClass,
           sensitivity: opts.sensitivity,
+          version: version.trim(),
+          supersedes: supersedes?.id,
           review_date: opts.reviewDate,
           expiry_date: opts.expiryDate,
         })
@@ -443,15 +474,24 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
       <div role="dialog" aria-modal="true" aria-label="Upload documents" className="relative w-full max-w-lg h-full bg-white shadow-xl flex flex-col">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Upload documents</h2>
-            <p className="text-xs text-gray-400 mt-0.5">New documents start as drafts until approved.</p>
+            <h2 className="text-lg font-semibold text-gray-900">{supersedes ? 'Upload a new version' : 'Upload documents'}</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {supersedes
+                ? `Replaces "${supersedes.name}" (${supersedes.version}) once the new version is approved.`
+                : 'New documents start as drafts until approved by someone other than the uploader.'}
+            </p>
           </div>
           <button onClick={() => !progress && onClose()} aria-label="Close" className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
           <section>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">1. Choose files</h3>
+            <label className={LABEL} htmlFor="kb-version">Version</label>
+            <input id="kb-version" value={version} onChange={(e) => setVersion(e.target.value)} className={INPUT} placeholder="v1.0" />
+            {versionError && <p className="text-xs text-red-700 mt-1">{versionError}</p>}
+          </section>
+          <section>
+            <h3 className="text-sm font-semibold text-gray-900 mb-2">1. Choose {supersedes ? 'the new file' : 'files'}</h3>
             <div
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
               onDragLeave={() => setIsDragging(false)}
@@ -771,6 +811,7 @@ export default function KnowledgeBase() {
   const [diseaseOptions, setDiseaseOptions] = useState([])
   const [regionList, setRegionList] = useState([])
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [newVersionOf, setNewVersionOf] = useState(null)
   const [editingDoc, setEditingDoc] = useState(null)
   const [tab, setTab] = useState('documents')
   const [search, setSearch] = useState('')
@@ -885,8 +926,10 @@ export default function KnowledgeBase() {
   async function changeApproval(doc, status, message) {
     try {
       const updated = await setKbApproval(doc.id, status)
-      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? updated : d)))
-      showToast(message)
+      const retired = new Set(updated.retiredVersions || [])
+      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? updated
+        : retired.has(d.id) ? { ...d, approvalStatus: 'retired', supersededBy: doc.id } : d)))
+      showToast(retired.size ? `${message}. The previous version was retired.` : message)
     } catch (e) {
       showToast(e.message || 'Could not update approval', true)
     }
@@ -894,21 +937,32 @@ export default function KnowledgeBase() {
 
   async function saveEdit(values) {
     try {
+      const wasApproved = approvalKey(editingDoc) === 'approved'
       const updated = await updateKbDocument(editingDoc.id, values)
       setDocuments((prev) => prev.map((d) => (d.id === editingDoc.id ? updated : d)))
       setEditingDoc(null)
-      showToast('Document updated')
+      showToast(wasApproved && updated.approvalStatus === 'draft'
+        ? 'Document updated. It is back in draft and hidden from search until approved again.'
+        : 'Document updated')
     } catch (e) {
       showToast(e.message || 'Could not update document', true)
     }
   }
 
   async function deleteDocument(doc) {
-    if (!window.confirm(`Delete "${doc.name}"? It will be removed from the knowledge base and cannot be undone.`)) return
+    const kept = doc.approvedAt
+    if (!window.confirm(kept
+      ? `"${doc.name}" has been approved, so it is kept for audit. It will be retired and stop being used. Continue?`
+      : `Delete "${doc.name}"? It will be removed from the knowledge base and cannot be undone.`)) return
     try {
-      await deleteKbDocument(doc.id)
-      setDocuments((prev) => prev.filter((d) => d.id !== doc.id))
-      showToast('Document deleted')
+      const res = await deleteKbDocument(doc.id)
+      if (res?.retired) {
+        setDocuments((prev) => prev.map((d) => (d.id === doc.id ? res.document : d)))
+        showToast('Document retired. It was used for answers, so it is kept for audit.')
+      } else {
+        setDocuments((prev) => prev.filter((d) => d.id !== doc.id))
+        showToast('Document deleted')
+      }
     } catch (e) {
       showToast(e.message || 'Could not delete', true)
     }
@@ -923,6 +977,7 @@ export default function KnowledgeBase() {
     const a = approvalKey(doc)
     const items = []
     if (canManage) items.push({ label: 'Edit', Icon: Pencil, onClick: () => setEditingDoc(doc) })
+    if (canManage && a !== 'retired') items.push({ label: 'Upload new version', Icon: CopyPlus, onClick: () => { setNewVersionOf(doc); setUploadOpen(true) } })
     if (canApprove && a === 'approved') items.push({ label: 'Retire', Icon: Ban, onClick: () => retireDocument(doc) })
     if (canApprove && a !== 'draft') items.push({ label: 'Back to draft', Icon: Undo2, onClick: () => changeApproval(doc, 'Draft', 'Moved back to draft') })
     if (canManage) items.push({ label: 'Re-index', Icon: RotateCcw, onClick: () => reindexDocument(doc.id), disabled: doc.status === 'processing' })
@@ -1082,8 +1137,8 @@ export default function KnowledgeBase() {
                               {showApprove && (
                                 <button
                                   onClick={() => changeApproval(doc, 'Approved', 'Document approved')}
-                                  disabled={doc.status !== 'indexed'}
-                                  title={doc.status !== 'indexed' ? 'Available once indexing completes' : 'Approve for search'}
+                                  disabled={doc.status !== 'indexed' || doc.selfApprovalBlocked}
+                                  title={doc.selfApprovalBlocked ? 'You uploaded this document, so someone else must approve it' : doc.status !== 'indexed' ? 'Available once indexing completes' : 'Approve for search'}
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 text-emerald-700 px-3 py-1.5 text-xs font-medium hover:bg-emerald-50 disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                   <Check className="w-3.5 h-3.5" /> Approve
@@ -1120,7 +1175,8 @@ export default function KnowledgeBase() {
 
       <UploadDrawer
         open={uploadOpen}
-        onClose={() => setUploadOpen(false)}
+        onClose={() => { setUploadOpen(false); setNewVersionOf(null) }}
+        supersedes={newVersionOf}
         roleOptions={roleOptions}
         diseaseOptions={diseaseSelectOptions}
         regionOptions={regionOptions}

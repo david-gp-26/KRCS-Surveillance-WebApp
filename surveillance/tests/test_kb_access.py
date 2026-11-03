@@ -126,7 +126,12 @@ class TestKBAccess(FrappeTestCase):
 		self._denied(SERVICE, "NO_CAPABILITY", on_behalf_of=NO_CAP)
 
 	def test_public_actor_needs_public_guidance(self):
-		self._denied(SERVICE, "PUBLIC_NOT_ENABLED", on_behalf_of="whatsapp:+254799000111")
+		saved = frappe.conf.get("kb_public_enabled")
+		frappe.conf["kb_public_enabled"] = 0
+		try:
+			self._denied(SERVICE, "PUBLIC_NOT_ENABLED", on_behalf_of="whatsapp:+254799000111")
+		finally:
+			frappe.conf["kb_public_enabled"] = saved
 
 	def test_legacy_audience_contract_refused(self):
 		h.as_user(SERVICE)

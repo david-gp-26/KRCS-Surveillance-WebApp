@@ -33,6 +33,7 @@ Site config (bench --site <site> set-config <key> <value>):
     kb_score_high         default 0.60  (dense score at or above = confidence "high")
     kb_score_low          default 0.45  (dense score below = confidence "low")
 """
+import hashlib
 import json
 import os
 import re
@@ -57,6 +58,10 @@ ALL_ROLES = "All roles"
 ALL_REGIONS = "All regions"
 LANGUAGES = ("English", "Kiswahili")
 SENSITIVITIES = ("Standard", "Sensitive")
+VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}$")   # v1, v1.2, v1.2.3
+# changing any of these on an Approved document can widen who sees it: it goes back to Draft (R60, R62)
+GOVERNED_FIELDS = ("category", "version", "applied_to", "diseases", "regions", "language", "audience_class",
+	"sensitivity")
 LANGUAGE_BOOST = 0.05   # added to the score of passages in the asker's language when ranking
 MAX_LIMIT = 20
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "md"}
@@ -258,6 +263,8 @@ def _access_payload(doc):
 		"expiry_date": str(doc.expiry_date) if doc.get("expiry_date") else None,
 		"version": doc.version,
 		"category": doc.category,
+		"content_hash": doc.get("approved_hash") or doc.get("content_hash"),
+		"document_family": _family(doc),
 	}
 
 
@@ -295,6 +302,37 @@ def _sync_access(doc):
 			client.set_payload(_collection(), payload=_access_payload(doc), points=_doc_filter(doc.name))
 	except Exception:
 		frappe.log_error(title=f"Knowledge Base: access sync failed for {doc.name}")
+
+
+def file_hash(file_url):
+	"""SHA-256 of the stored file: binds an approval to exactly the bytes that were reviewed."""
+	path = frappe.get_doc("File", {"file_url": file_url}).get_full_path()
+	h = hashlib.sha256()
+	with open(path, "rb") as f:
+		for block in iter(lambda: f.read(1 << 20), b""):
+			h.update(block)
+	return h.hexdigest()
+
+
+def _check_version(version):
+	if version and not VERSION_RE.match(version.strip()):
+		frappe.throw(_("Version must look like v1, v1.2 or v1.2.3."))
+	return (version or "v1.0").strip()
+
+
+def _family(doc):
+	return doc.get("document_family") or doc.name
+
+
+def _norm(value):
+	"""Compare list-like fields regardless of order or spacing."""
+	return sorted(_split(value)) if isinstance(value, (list, tuple)) or "," in str(value or "") else str(value or "").strip()
+
+
+def _served(name):
+	"""True once a document may have reached a user: it was approved, or the Query Log cites it."""
+	return bool(frappe.db.get_value(DOCTYPE, name, "approved_on")) or bool(
+		frappe.db.exists("Chatbot Query Log", {"matched_document": name}))
 
 
 # ---------- text extraction and chunking ----------
@@ -398,6 +436,15 @@ def index_document(docname):
 	from qdrant_client.models import PointStruct
 	doc = frappe.get_doc(DOCTYPE, docname)
 	try:
+		current = file_hash(doc.file)
+		if doc.get("approved_hash") and doc.approval_status == "Approved" and current != doc.approved_hash:
+			# the file was replaced after approval: keep serving nothing new, flag it for a human
+			frappe.db.set_value(DOCTYPE, docname, {"status": "Failed", "error":
+				"The file changed after approval. Upload it as a new version and approve that instead."})
+			frappe.db.commit()
+			frappe.publish_realtime("kb_document_updated", {"name": docname}, after_commit=True)
+			return
+		doc.content_hash = current
 		path = frappe.get_doc("File", {"file_url": doc.file}).get_full_path()
 		chunks = [{**u, "text": piece} for u in extract_units(path, doc.extension) for piece in chunk_text(u["text"])]
 		if not chunks:
@@ -420,7 +467,7 @@ def index_document(docname):
 						"chunk": start + i, "section": c["section"], "page": c["page"], "text": c["text"], **access},
 				) for i, (c, v, sv) in enumerate(zip(part, vectors, sparse))
 			])
-		doc.db_set({"status": "Indexed", "chunks": len(chunks), "error": ""})
+		doc.db_set({"status": "Indexed", "chunks": len(chunks), "error": "", "content_hash": current})
 	except Exception as e:
 		frappe.db.rollback()
 		frappe.log_error(title=f"Knowledge Base indexing failed: {docname}")
@@ -448,6 +495,10 @@ def _row(d):
 		"effectiveFrom": str(d.effective_from) if d.get("effective_from") else None,
 		"audienceClass": d.get("audience_class") or kb_access.DEFAULT_AUDIENCE_CLASS,
 		"sensitivity": d.get("sensitivity") or "Standard",
+		"family": d.get("document_family") or d.name, "supersedes": d.get("supersedes"),
+		"supersededBy": d.get("superseded_by"), "contentHash": d.get("content_hash"),
+		"approvedHash": d.get("approved_hash"), "governanceNote": d.get("governance_note"),
+		"selfApprovalBlocked": d.owner == frappe.session.user and not _self_approval_allowed(),
 		"approvalStatus": (d.get("approval_status") or "Draft").lower(),
 		"approvedBy": frappe.utils.get_fullname(d.approved_by) if d.get("approved_by") else None,
 		"approvedAt": str(d.approved_on) if d.get("approved_on") else None,
@@ -466,7 +517,7 @@ def list_documents():
 @frappe.whitelist(methods=["POST"])
 def create_document(file_url, category, applied_to=None, version="v1.0", diseases=None,
 		regions=None, language="English", review_date=None, expiry_date=None, effective_from=None,
-		audience_class=None, sensitivity=None):
+		audience_class=None, sensitivity=None, supersedes=None):
 	"""Register an already uploaded file (via /api/method/upload_file) and queue indexing. Starts as Draft."""
 	require_capability(CAPABILITY)
 	f = frappe.get_doc("File", {"file_url": file_url})
@@ -475,9 +526,18 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		frappe.throw(_("Only PDF, DOCX, TXT and MD files are supported."))
 	if cint(f.file_size) > MAX_BYTES:
 		frappe.throw(_("File is larger than 25 MB."))
+	version = _check_version(version)
+	family = None
+	if supersedes:
+		prev = frappe.get_doc(DOCTYPE, supersedes)
+		family = _family(prev)
+		taken = frappe.db.exists(DOCTYPE, {"document_family": family, "version": version}) or (
+			prev.version == version)
+		if taken:
+			frappe.throw(_("Version {0} already exists for this document. Use a higher version.").format(version))
 	doc = frappe.get_doc({
 		"doctype": DOCTYPE, "title": f.file_name, "file": file_url, "extension": ext,
-		"version": version or "v1.0", "category": category, "applied_to": ", ".join(_split(applied_to)) or ALL_ROLES,
+		"version": version, "category": category, "supersedes": supersedes or None, "document_family": family, "applied_to": ", ".join(_split(applied_to)) or ALL_ROLES,
 		"diseases": _clean_diseases(diseases), "approval_status": "Draft",
 		"regions": _clean_regions(regions), "language": language or "English",
 		"review_date": review_date or None, "expiry_date": expiry_date or None,
@@ -487,7 +547,10 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		"size_bytes": cint(f.file_size), "status": "Processing",
 	})
 	_check_dates(doc)
+	doc.content_hash = file_hash(file_url)
 	doc.insert(ignore_permissions=True)
+	if not doc.document_family:
+		doc.db_set("document_family", doc.name)
 	f.db_set({"attached_to_doctype": DOCTYPE, "attached_to_name": doc.name})
 	_enqueue(doc.name)
 	return _row(doc)
@@ -500,6 +563,9 @@ def update_document(name, category=None, applied_to=None, diseases=None, version
 	"""Edit document details. Everything is copied to Qdrant without re-embedding."""
 	require_capability(CAPABILITY)
 	doc = frappe.get_doc(DOCTYPE, name)
+	before = {f: doc.get(f) for f in GOVERNED_FIELDS}
+	if version is not None:
+		version = _check_version(version)
 	if category is not None:
 		doc.category = category
 	if version is not None:
@@ -523,6 +589,12 @@ def update_document(name, category=None, applied_to=None, diseases=None, version
 	if sensitivity is not None:
 		doc.sensitivity = sensitivity or "Standard"
 	_check_dates(doc)
+	changed = [f for f in GOVERNED_FIELDS if _norm(before[f]) != _norm(doc.get(f))]
+	if changed and doc.approval_status == "Approved":
+		# approved content is frozen: any change to who may see it, or what it is, needs a fresh approval
+		doc.approval_status = "Draft"
+		doc.governance_note = _("Returned to Draft on {0} by {1}: changed {2}. Needs approval again.").format(
+			today(), frappe.session.user, ", ".join(changed))
 	doc.save(ignore_permissions=True)
 	_sync_access(doc)
 	return _row(doc)
@@ -535,20 +607,48 @@ def set_approval(name, status):
 	if status not in APPROVAL_STATUSES:
 		frappe.throw(_("Status must be one of: {0}").format(", ".join(APPROVAL_STATUSES)))
 	doc = frappe.get_doc(DOCTYPE, name)
-	if status == "Approved" and doc.status != "Indexed":
-		frappe.throw(_("Only an indexed document can be approved. Wait for indexing to finish."))
-	doc.approval_status = status
+	retired = []
 	if status == "Approved":
+		if doc.status != "Indexed":
+			frappe.throw(_("Only an indexed document can be approved. Wait for indexing to finish."))
+		if doc.owner == frappe.session.user and not _self_approval_allowed():
+			raise KBAccessDenied(_("You uploaded this document, so someone else must approve it."), "SELF_APPROVAL")
+		current = file_hash(doc.file)
+		if doc.get("content_hash") and current != doc.content_hash:
+			frappe.throw(_("The file changed since it was indexed. Re-index it, check it, then approve."))
+		doc.approved_hash = current
+		doc.content_hash = current
 		doc.approved_by = frappe.session.user
 		doc.approved_on = now_datetime()
+		doc.governance_note = None
+	doc.approval_status = status
 	doc.save(ignore_permissions=True)
 	_sync_access(doc)
-	return _row(doc)
+	if status == "Approved":
+		# one active version per document family: approving a version retires the others
+		for other in frappe.get_all(DOCTYPE, filters={"document_family": _family(doc), "name": ["!=", doc.name],
+				"approval_status": "Approved"}, pluck="name"):
+			o = frappe.get_doc(DOCTYPE, other)
+			o.approval_status = "Retired"
+			o.superseded_by = doc.name
+			o.governance_note = _("Superseded by {0} ({1}) on {2}.").format(doc.name, doc.version, today())
+			o.save(ignore_permissions=True)
+			_sync_access(o)
+			retired.append(other)
+	return _row(doc) | {"retiredVersions": retired}
+
+
+def _self_approval_allowed():
+	"""Separation of duties: the uploader may not approve their own document (site config kb_allow_self_approval)."""
+	return cint(frappe.conf.get("kb_allow_self_approval")) == 1
 
 
 @frappe.whitelist(methods=["POST"])
 def reindex_document(name):
 	require_capability(CAPABILITY)
+	doc = frappe.get_doc(DOCTYPE, name)
+	if doc.approval_status == "Approved" and doc.get("approved_hash") and file_hash(doc.file) != doc.approved_hash:
+		frappe.throw(_("The file changed after approval. Upload it as a new version and approve that instead."))
 	frappe.db.set_value(DOCTYPE, name, {"status": "Processing", "chunks": 0, "error": ""})
 	_enqueue(name)
 	return _row(frappe.get_doc(DOCTYPE, name))
@@ -571,6 +671,15 @@ def reindex_all():
 def delete_document(name):
 	require_capability(CAPABILITY)
 	doc = frappe.get_doc(DOCTYPE, name)
+	if _served(name):
+		# records retention: content that may have reached users is kept for audit; it just stops being served
+		if doc.approval_status != "Retired":
+			doc.approval_status = "Retired"
+			doc.governance_note = _("Retired instead of deleted on {0} by {1}: it was approved or used in answers.").format(
+				today(), frappe.session.user)
+			doc.save(ignore_permissions=True)
+			_sync_access(doc)
+		return {"retired": name, "document": _row(doc)}
 	try:
 		_delete_vectors(_qdrant(), name)
 	except Exception:
