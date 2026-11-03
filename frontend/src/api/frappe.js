@@ -898,6 +898,9 @@ export const askKnowledgeBase = ({ query, language, history = [], streamId, conv
 
 export const getKbPassage = (id) => kbRequest('get_passage', { id })
 
+export const getKbHealth = () => callMethod('surveillance.kb_ops.health')
+export const runKbReconcile = () => callMethodPost('surveillance.kb_ops.run_reconcile', {})
+
 export const getDiseaseVocabulary = () => kbRequest('get_disease_vocabulary')
 
 // Chatbot Query Log (surveillance.chatbot_log)

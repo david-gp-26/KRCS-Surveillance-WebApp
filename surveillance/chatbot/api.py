@@ -97,6 +97,8 @@ def chat(user, message, channel, language=None, selected_protocol_id=None):
 	"""Ask the service as `user` and return what the client may see. Used by every channel entry point."""
 	if user == "Guest":
 		_deny("NOT_LOGGED_IN", _("Please sign in to ask a question."), user, channel, message)
+	from surveillance.kb_ops import throttle
+	throttle("chat")
 	row = kb_access._user_row(user)
 	if user != "Administrator" and not kb_access.account_active(row):
 		_deny("ACCOUNT_INACTIVE", _("Your account is not active."), user, channel, message)

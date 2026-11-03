@@ -24,7 +24,7 @@ import AppShell from '../components/layout/AppShell'
 import { KB_CATEGORIES, KB_WORKSPACE_LIMIT_BYTES } from '../data/mockKnowledgeBase'
 import {
   uploadFile, getKbDocuments, createKbDocument, reindexKbDocument, deleteKbDocument, updateKbDocument,
-  setKbApproval, getRoles, getDiseaseOptions, getRegions, searchKnowledgeBase,
+  setKbApproval, getRoles, getDiseaseOptions, getRegions, searchKnowledgeBase, getKbHealth, runKbReconcile,
 } from '../api/frappe'
 import { useCapabilities } from '../context/CapabilitiesContext'
 
@@ -818,6 +818,70 @@ function TestSearch() {
   )
 }
 
+function HealthPanel() {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function load() {
+    setError('')
+    try { setData(await getKbHealth()) } catch (e) { setError(e.message || 'Could not load health') }
+  }
+  useEffect(() => { load() }, [])
+
+  async function reconcile() {
+    setBusy(true)
+    try { await runKbReconcile(); await load() } catch (e) { setError(e.message || 'Reconcile failed') }
+    setBusy(false)
+  }
+
+  if (error) return <p className="bg-red-50 text-red-700 text-sm rounded-lg px-4 py-3">{error}</p>
+  if (!data) return <p className="text-sm text-gray-400">Loading…</p>
+  const q = data.qdrant || {}
+  const rec = data.last_reconcile
+  const row = (label, value, ok = true) => (
+    <div className="flex items-start justify-between gap-4 py-2 border-b border-gray-50 last:border-0">
+      <span className="text-sm text-gray-500">{label}</span>
+      <span className={`text-sm text-right ${ok ? 'text-gray-900' : 'text-red-700 font-medium'}`}>{value}</span>
+    </div>
+  )
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {!!data.warnings?.length && (
+        <div className="lg:col-span-2 bg-amber-50 border border-amber-100 rounded-2xl p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-amber-800 mb-1"><AlertTriangle className="w-4 h-4" /> Needs attention</div>
+          <ul className="list-disc pl-5 text-sm text-amber-800 space-y-0.5">{data.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+        </div>
+      )}
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Search index</h3>
+        {row('Qdrant', q.reachable ? 'Reachable' : `Unreachable: ${q.error || ''}`, q.reachable)}
+        {row('Collection', `${q.collection || '-'} · ${q.points ?? 0} passages`)}
+        {row('API key / TLS', `${q.api_key ? 'Key set' : 'No key'} · ${q.tls ? 'TLS' : 'No TLS'}`, q.api_key)}
+        {row('Last reconciliation', rec ? `${rec.at?.slice(0, 16)} · ${rec.checked} checked, ${rec.missing?.length || 0} missing, ${rec.orphans?.length || 0} orphans` : 'Not run yet')}
+        <button type="button" onClick={reconcile} disabled={busy} className="mt-3 text-xs font-medium border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50">
+          {busy ? 'Checking…' : 'Check index now'}
+        </button>
+      </div>
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Models and licences</h3>
+        {Object.entries(data.models || {}).map(([k, m]) => row(k, `${m.model} · ${m.licence}`, m.approved_for_use))}
+        {row('Answer model', data.llm?.reachable ? (data.llm.pulled ? 'Ready' : 'Not downloaded') : 'Unreachable', !!data.llm?.reachable)}
+        {row('Retrieval config', <code className="text-xs">{data.retrieval_config}</code>)}
+        {row('Access policy', data.access_policy)}
+      </div>
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Documents</h3>
+        {Object.entries(data.documents || {}).map(([k, v]) => row(k, v, !(k === 'failed' && v > 0)))}
+      </div>
+      <div className="bg-white rounded-2xl border border-gray-100 p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-2">Chatbot service</h3>
+        {row('Last protocol reload', data.chatbot_last_reload ? `${data.chatbot_last_reload.at?.slice(0, 16)} · HTTP ${data.chatbot_last_reload.status ?? 'error'}` : 'None yet', !data.chatbot_last_reload || data.chatbot_last_reload.status === 200)}
+      </div>
+    </div>
+  )
+}
+
 // ---------- page ----------
 
 export default function KnowledgeBase() {
@@ -1036,7 +1100,7 @@ export default function KnowledgeBase() {
 
       {canManage && (
         <div className="flex gap-6 border-b border-gray-100 mb-5">
-          {[{ key: 'documents', label: 'Documents' }, { key: 'test', label: 'Test search' }].map((t) => (
+          {[{ key: 'documents', label: 'Documents' }, { key: 'test', label: 'Test search' }, { key: 'health', label: 'Health' }].map((t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -1049,7 +1113,9 @@ export default function KnowledgeBase() {
         </div>
       )}
 
-      {tab === 'test' && canManage ? (
+      {tab === 'health' && canManage ? (
+        <HealthPanel />
+      ) : tab === 'test' && canManage ? (
         <TestSearch />
       ) : (
         <>

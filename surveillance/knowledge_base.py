@@ -44,7 +44,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, getdate, now_datetime, today
 
-from surveillance import kb_access, kb_grounding, kb_safety
+from surveillance import kb_access, kb_grounding, kb_ops, kb_safety
 from surveillance.capabilities import has_capability, require_capability
 from surveillance.kb_access import KBAccessDenied  # noqa: F401  (re-exported for callers and tests)
 
@@ -201,6 +201,15 @@ def _ensure_collection(client, size):
 def _doc_filter(docname):
 	from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
 	return FilterSelector(filter=Filter(must=[FieldCondition(key="doc", match=MatchValue(value=docname))]))
+
+
+def _delete_stale_chunks(client, docname, keep):
+	"""Remove chunks numbered keep and above (left over from a longer earlier version)."""
+	from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue, Range
+	if client.collection_exists(_collection()):
+		client.delete(_collection(), points_selector=FilterSelector(filter=Filter(must=[
+			FieldCondition(key="doc", match=MatchValue(value=docname)),
+			FieldCondition(key="chunk", range=Range(gte=keep))])))
 
 
 def _delete_vectors(client, docname):
@@ -459,7 +468,8 @@ def index_document(docname):
 		if not chunks:
 			raise ValueError("No readable text found. Scanned PDFs need OCR before upload.")
 		client = _qdrant()
-		_delete_vectors(client, docname)
+		# gap-free: new chunks overwrite the old ones in place (same ids); stale ones are removed afterwards, so
+		# the document stays searchable while it is re-indexed (KB-12)
 		access = _access_payload(doc)
 		batch = 64
 		for start in range(0, len(chunks), batch):
@@ -474,9 +484,11 @@ def index_document(docname):
 					vector={DENSE: v, SPARSE: sv},
 					payload={"doc": docname, "title": doc.title, "category": doc.category, "version": doc.version,
 						"chunk": start + i, "section": c["section"], "page": c["page"], "text": c["text"],
-						"injection_suspect": kb_grounding.injection_suspect(c["text"]), **access},
+						"injection_suspect": kb_grounding.injection_suspect(c["text"]),
+						"chunk_language": kb_ops.chunk_language(c["text"], doc.get("language") or "English"), **access},
 				) for i, (c, v, sv) in enumerate(zip(part, vectors, sparse))
 			])
+		_delete_stale_chunks(client, docname, len(chunks))
 		doc.db_set({"status": "Indexed", "chunks": len(chunks), "error": "", "content_hash": current})
 	except Exception as e:
 		frappe.db.rollback()
@@ -538,6 +550,7 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		frappe.throw(_("Only PDF, DOCX, TXT and MD files are supported."))
 	if cint(f.file_size) > MAX_BYTES:
 		frappe.throw(_("File is larger than 25 MB."))
+	kb_ops.check_upload(f.get_full_path(), ext)   # the bytes must match the extension (KB-19)
 	version = _check_version(version)
 	family = None
 	if supersedes:
@@ -947,7 +960,8 @@ def _retrieve(query, ctx, category=None, disease=None, language=None, limit=CONT
 		scores = [h.score for h in hits]
 	ranked = []
 	for h, sc in zip(hits, scores):
-		boost = LANGUAGE_BOOST if language and h.payload.get("language") == language else 0
+		lang = h.payload.get("chunk_language") or h.payload.get("language")
+		boost = LANGUAGE_BOOST if language and lang == language else 0
 		ranked.append((float(sc) + boost, h))
 	ranked.sort(key=lambda x: -x[0])
 
@@ -982,6 +996,7 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 	audit = _Audit("kb_search", "Retrieval", query, language, correlation_id, channel or "API")
 	audit.claimed(on_behalf_of)
 	try:
+		kb_ops.throttle("search")
 		ctx = _access_context(audience, region, include_drafts, on_behalf_of, preview)
 		query = (query or "").strip()
 		if not query:
@@ -1148,6 +1163,7 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	audit = _Audit("kb_ask", "Conversation", query, language, correlation_id, channel or "Web")
 	audit.claimed(on_behalf_of)
 	try:
+		kb_ops.throttle("ask")
 		ctx = _access_context(audience, region, include_drafts, on_behalf_of, preview)
 		query = (query or "").strip()
 		if not query:
@@ -1311,6 +1327,7 @@ def get_passage(id, audience=None, region=None, correlation_id=None, channel=Non
 	audit = _Audit("kb_passage", "Retrieval", f"passage:{id}", None, correlation_id, channel or "API")
 	audit.claimed(on_behalf_of)
 	try:
+		kb_ops.throttle("passage")
 		ctx = _access_context(audience, region, on_behalf_of=on_behalf_of)
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		audit.denied(e)

@@ -220,7 +220,7 @@ doc_events = {
 
 scheduler_events = {
 	"daily": ["surveillance.knowledge_base.retire_expired", "surveillance.knowledge_base.notify_upcoming_reviews", "surveillance.chatbot_log.purge_old_logs",
-		"surveillance.chatbot.api._reload", "surveillance.context.import_weather",
+		"surveillance.chatbot.api._reload", "surveillance.kb_ops.daily_reconcile", "surveillance.context.import_weather",
 		"surveillance.event_tasks.daily_reminders"],
 	"hourly_long": ["surveillance.cbs_feed.hourly", "surveillance.risk.refresh_open", "surveillance.push.check_receipts"],
 	"daily_long": ["surveillance.cbs_feed.daily"],
@@ -334,3 +334,6 @@ has_permission = {
 
 # Mobile app background sync: "Authorization: device <key>:<secret>" (one key per phone, see field_api)
 auth_hooks = ["surveillance.field_api.device_auth"]
+
+# Knowledge Base: load the search models in each web worker after its first request (KB-20)
+before_request = ["surveillance.kb_ops.warm_in_background"]
