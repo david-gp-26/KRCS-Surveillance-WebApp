@@ -1,0 +1,391 @@
+{
+ "actions": [],
+ "creation": "2026-11-03 09:00:00.000000",
+ "modified": "2026-11-03 09:00:00.000000",
+ "modified_by": "Administrator",
+ "owner": "Administrator",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "module": "Surveillance",
+ "name": "Chatbot Query Log",
+ "field_order": [
+  "correlation_id",
+  "level",
+  "channel",
+  "route",
+  "cb_who",
+  "user",
+  "user_ref",
+  "caller",
+  "actor_class",
+  "audience_roles",
+  "scope",
+  "language",
+  "sb_q",
+  "query_text",
+  "answer",
+  "answer_mode",
+  "sb_outcome",
+  "outcome",
+  "reason",
+  "match_confidence",
+  "confidence_band",
+  "cb_outcome",
+  "matched_document",
+  "matched_protocol",
+  "matched_content_version",
+  "passages",
+  "sb_access",
+  "access_decision",
+  "access_policy_version",
+  "deny_reason_code",
+  "cb_access",
+  "preview",
+  "retrieval_config",
+  "latency_ms",
+  "error",
+  "sb_esc",
+  "escalated_to_human",
+  "escalated_to",
+  "escalation_status",
+  "cb_esc",
+  "handled_by",
+  "handled_on",
+  "response_note",
+  "sb_fb",
+  "feedback_helpful",
+  "feedback_comment",
+  "cb_fb",
+  "feedback_on",
+  "sb_trace",
+  "trace"
+ ],
+ "fields": [
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation ID",
+   "read_only": 1,
+   "search_index": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "level",
+   "fieldtype": "Select",
+   "label": "Level",
+   "options": "Conversation\nRetrieval",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "channel",
+   "fieldtype": "Select",
+   "label": "Channel",
+   "options": "Web\nMobile\nWhatsApp\nSMS\nUSSD\nAPI",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "route",
+   "fieldtype": "Data",
+   "label": "Route",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_who",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "label": "User",
+   "options": "User",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "user_ref",
+   "fieldtype": "Data",
+   "label": "User Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "caller",
+   "fieldtype": "Link",
+   "label": "Caller",
+   "options": "User",
+   "read_only": 1,
+   "description": "Account that made the API call (the service account for proxied questions)"
+  },
+  {
+   "fieldname": "actor_class",
+   "fieldtype": "Data",
+   "label": "Actor Class",
+   "read_only": 1
+  },
+  {
+   "fieldname": "audience_roles",
+   "fieldtype": "Small Text",
+   "label": "Audience Roles",
+   "read_only": 1
+  },
+  {
+   "fieldname": "scope",
+   "fieldtype": "Small Text",
+   "label": "Operational Scope",
+   "read_only": 1
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Data",
+   "label": "Language",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sb_q",
+   "fieldtype": "Section Break",
+   "label": "Question"
+  },
+  {
+   "fieldname": "query_text",
+   "fieldtype": "Small Text",
+   "label": "Question",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "answer",
+   "fieldtype": "Long Text",
+   "label": "Reply Shown",
+   "read_only": 1
+  },
+  {
+   "fieldname": "answer_mode",
+   "fieldtype": "Data",
+   "label": "Reply Mode",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sb_outcome",
+   "fieldtype": "Section Break",
+   "label": "Outcome"
+  },
+  {
+   "fieldname": "outcome",
+   "fieldtype": "Select",
+   "label": "Outcome",
+   "options": "Matched\nNo Match\nRestricted\nEscalated\nConflict\nClarify\nRouted\nInfo\nError",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Data",
+   "label": "Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "match_confidence",
+   "fieldtype": "Float",
+   "label": "Match Confidence",
+   "read_only": 1,
+   "precision": "3"
+  },
+  {
+   "fieldname": "confidence_band",
+   "fieldtype": "Data",
+   "label": "Confidence Band",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_outcome",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "matched_document",
+   "fieldtype": "Link",
+   "label": "Matched Document",
+   "options": "Knowledge Document",
+   "read_only": 1
+  },
+  {
+   "fieldname": "matched_protocol",
+   "fieldtype": "Data",
+   "label": "Matched Protocol",
+   "read_only": 1
+  },
+  {
+   "fieldname": "matched_content_version",
+   "fieldtype": "Data",
+   "label": "Matched Content Version",
+   "read_only": 1
+  },
+  {
+   "fieldname": "passages",
+   "fieldtype": "JSON",
+   "label": "Passages Considered",
+   "read_only": 1,
+   "description": "Every passage returned with its score and band, including those too weak to show"
+  },
+  {
+   "fieldname": "sb_access",
+   "fieldtype": "Section Break",
+   "label": "Access Decision"
+  },
+  {
+   "fieldname": "access_decision",
+   "fieldtype": "Select",
+   "label": "Access Decision",
+   "options": "ALLOW\nDENY",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "access_policy_version",
+   "fieldtype": "Data",
+   "label": "Access Policy Version",
+   "read_only": 1
+  },
+  {
+   "fieldname": "deny_reason_code",
+   "fieldtype": "Data",
+   "label": "Deny Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_access",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "preview",
+   "fieldtype": "Check",
+   "label": "Editor Preview",
+   "read_only": 1,
+   "description": "An editor searched as another audience or included drafts"
+  },
+  {
+   "fieldname": "retrieval_config",
+   "fieldtype": "Data",
+   "label": "Retrieval Config",
+   "read_only": 1
+  },
+  {
+   "fieldname": "latency_ms",
+   "fieldtype": "Int",
+   "label": "Latency (ms)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sb_esc",
+   "fieldtype": "Section Break",
+   "label": "Escalation"
+  },
+  {
+   "fieldname": "escalated_to_human",
+   "fieldtype": "Check",
+   "label": "Escalated",
+   "read_only": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "escalated_to",
+   "fieldtype": "Data",
+   "label": "Escalated To",
+   "read_only": 1
+  },
+  {
+   "fieldname": "escalation_status",
+   "fieldtype": "Select",
+   "label": "Escalation Status",
+   "options": "\nOpen\nIn Progress\nAnswered\nClosed",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "cb_esc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "handled_by",
+   "fieldtype": "Link",
+   "label": "Handled By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "handled_on",
+   "fieldtype": "Datetime",
+   "label": "Handled On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "response_note",
+   "fieldtype": "Small Text",
+   "label": "Response Note"
+  },
+  {
+   "fieldname": "sb_fb",
+   "fieldtype": "Section Break",
+   "label": "Feedback"
+  },
+  {
+   "fieldname": "feedback_helpful",
+   "fieldtype": "Select",
+   "label": "Helpful",
+   "options": "\nYes\nNo",
+   "read_only": 1
+  },
+  {
+   "fieldname": "feedback_comment",
+   "fieldtype": "Small Text",
+   "label": "Feedback Comment",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cb_fb",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "feedback_on",
+   "fieldtype": "Datetime",
+   "label": "Feedback On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sb_trace",
+   "fieldtype": "Section Break",
+   "label": "Trace",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "trace",
+   "fieldtype": "JSON",
+   "label": "Service Trace",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "export": 1,
+   "report": 1,
+   "delete": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "CQL-.YYYY.-.######",
+ "naming_rule": "Expression",
+ "description": "One record per question to the Knowledge Base or the Response Support Chatbot (SDS B.4.2.3, SRS R57).",
+ "in_create": 1
+}

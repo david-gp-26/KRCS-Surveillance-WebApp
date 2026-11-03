@@ -69,6 +69,8 @@ CAPABILITIES = [
 	 "grants": {"Response Protocol": ["read", "write", "create", "delete"]}},
 	{"key": "view_chatbot_logs", "name": "View Chatbot Query Log", "category": "Response",
 	 "description": "View questions asked to the response chatbot", "grants": {"Chatbot Query Log": ["read"]}},
+	{"key": "handle_chatbot_escalations", "name": "Handle Chatbot Escalations", "category": "Response",
+	 "description": "Follow up questions the chatbot escalated to a person", "grants": {"Chatbot Query Log": ["read", "write"]}},
 
 	# Users & Roles
 	{"key": "view_users", "name": "View Users", "category": "Users & Roles",

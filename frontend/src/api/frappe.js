@@ -941,6 +941,21 @@ export const getKbPassage = (id) => kbRequest('get_passage', { id })
 
 export const getDiseaseVocabulary = () => kbRequest('get_disease_vocabulary')
 
+// Chatbot Query Log (surveillance.chatbot_log)
+const qs = (params) => {
+  const u = new URLSearchParams()
+  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') u.set(k, v) })
+  const s = u.toString()
+  return s ? `?${s}` : ''
+}
+export const listChatbotLogs = (params) => callMethod(`/api/method/surveillance.chatbot_log.list_logs${qs(params)}`)
+export const getChatbotLog = (name) => callMethod(`/api/method/surveillance.chatbot_log.get_log${qs({ name })}`)
+export const getChatbotMetrics = (params) => callMethod(`/api/method/surveillance.chatbot_log.get_metrics${qs(params)}`)
+export const updateChatbotEscalation = (name, status, note) =>
+  callMethodPost('/api/method/surveillance.chatbot_log.update_escalation', { name, status, note })
+export const submitChatbotFeedback = (name, helpful, comment) =>
+  callMethodPost('/api/method/surveillance.chatbot_log.submit_feedback', { name, helpful: helpful ? 1 : 0, comment })
+
 export async function getReviewEvents(params = {}) {
   const qs = new URLSearchParams()
   Object.entries({ status: 'New', ...params }).forEach(([k, v]) => {

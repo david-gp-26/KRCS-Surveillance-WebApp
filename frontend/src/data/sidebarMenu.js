@@ -16,6 +16,7 @@ export const SIDEBAR_MENU = [
     { label: 'Event Lifecycle', icon: 'LifeBuoy', page: 'event-lifecycle', requiresCapability: 'view_review_queue' },
     { label: 'Knowledge Base', icon: 'BookOpen', page: 'knowledge-base', requiresCapability: null },
     { label: 'AI Data Assistant', icon: 'Sparkles', page: 'ai-data-assistant', requiresCapability: null },
+    { label: 'Chatbot Query Log', icon: 'MessagesSquare', page: 'chatbot-query-log', requiresCapability: 'view_chatbot_logs' },
   ]},
   { section: 'DATA', items: [
     { label: 'Analytics', icon: 'BarChart3', page: 'analytics', requiresCapability: 'view_analytics' },

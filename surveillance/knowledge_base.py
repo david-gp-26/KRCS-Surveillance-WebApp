@@ -83,6 +83,31 @@ class KBUnavailable(frappe.ValidationError):
 	http_status_code = 503
 
 
+class KBAccessDenied(frappe.PermissionError):
+	"""A protected Knowledge Base action was refused. `code` is the deny reason logged in the Chatbot Query Log."""
+
+	def __init__(self, message, code="DENIED"):
+		super().__init__(message)
+		self.code = code
+
+
+ACCESS_POLICY_VERSION = "kb-access-1"
+
+
+def retrieval_config():
+	"""Short id of everything that shapes an answer, stamped on every Query Log record (AI/ML spec 7.9)."""
+	parts = [
+		_collection(),
+		_conf("kb_embedding_model", DEFAULT_MODEL).split("/")[-1],
+		_conf("kb_sparse_model", DEFAULT_SPARSE).split("/")[-1],
+		_conf("kb_reranker_model", DEFAULT_RERANKER).split("/")[-1],
+		_conf("kb_llm_model", DEFAULT_LLM),
+		"t%s-%s" % (_conf("kb_score_high", 0.60), _conf("kb_score_low", 0.45)),
+		"m%s" % _conf("kb_min_rerank_score", 0.15),
+	]
+	return "|".join(str(p) for p in parts)[:140]
+
+
 # ---------- clients ----------
 
 def _conf(key, default=None):
@@ -537,11 +562,11 @@ def _assigned_region(user):
 def _access_context(audience=None, region=None, include_drafts=0):
 	"""Who is asking and what they may see. Raises 403/417 on bad requests."""
 	is_editor = has_capability(CAPABILITY)
-	if not is_editor:
-		require_capability(SEARCH_CAPABILITY)
+	if not is_editor and not has_capability(SEARCH_CAPABILITY):
+		raise KBAccessDenied(_("You do not have permission to perform this action."), "NO_CAPABILITY")
 	can_proxy = is_editor or has_capability(SERVICE_CAPABILITY)
 	if (audience or region) and not can_proxy:
-		frappe.throw(_("You cannot search on behalf of another role or region."), frappe.PermissionError)
+		raise KBAccessDenied(_("You cannot search on behalf of another role or region."), "PROXY_NOT_ALLOWED")
 
 	if audience:
 		roles = _split(audience)
@@ -568,6 +593,59 @@ def _access_context(audience=None, region=None, include_drafts=0):
 		regions = [r] if r else None  # no assigned region = national user, sees every region
 
 	return {"approved_only": not (is_editor and cint(include_drafts)), "roles": roles, "regions": regions}
+
+
+class _Audit:
+	"""Collects what one request did and writes it to the Chatbot Query Log (surveillance.chatbot_log)."""
+
+	def __init__(self, route, level, query, language=None, correlation_id=None, channel=None):
+		from surveillance import chatbot_log
+		self.log = chatbot_log
+		self.started = time.monotonic()
+		# a correlation id from the caller links this record to the conversation (e.g. a WhatsApp request id)
+		self.correlation_id = (str(correlation_id)[:64] if correlation_id else None) or chatbot_log.new_correlation_id()
+		self.name = None
+		self.fields = {
+			"route": route, "level": level, "query_text": (query or "").strip(), "language": language,
+			"correlation_id": self.correlation_id, "channel": channel if channel in chatbot_log.CHANNELS else "Web",
+			"caller": frappe.session.user, "user": frappe.session.user if frappe.session.user != "Guest" else None,
+			"access_policy_version": ACCESS_POLICY_VERSION, "retrieval_config": retrieval_config(),
+		}
+
+	def context(self, ctx):
+		self.fields.update({
+			"access_decision": "ALLOW",
+			"audience_roles": "ALL (editor)" if ctx["roles"] is None else ", ".join(ctx["roles"]) or "-",
+			"scope": "ALL" if ctx["regions"] is None else ", ".join(ctx["regions"]),
+			"preview": 1 if ctx.get("preview") else 0,
+		})
+
+	def _ms(self):
+		return int((time.monotonic() - self.started) * 1000)
+
+	def denied(self, exc):
+		code = getattr(exc, "code", None) or ("INVALID_REQUEST" if isinstance(exc, frappe.ValidationError) else "DENIED")
+		self.name = self.log.log_denied(**self.fields, deny_reason_code=code, error=str(exc), latency_ms=self._ms())
+
+	def failed(self, exc):
+		self.name = self.log.log(**self.fields, outcome="Error", error=str(exc), latency_ms=self._ms())
+
+	def done(self, **fields):
+		self.fields.update(fields)
+		self.fields.setdefault("access_decision", "ALLOW")
+		self.name = self.log.log(**self.fields, latency_ms=self._ms())
+		return self.name
+
+
+def _passage_trace(scored):
+	"""[(rank_score, dense_score, point)] -> compact list for the log."""
+	out = []
+	for rs, dense, p, shown in scored:
+		pl = p.payload
+		out.append({"id": str(p.id), "doc": pl.get("doc"), "version": pl.get("version"), "section": pl.get("section"),
+			"rank_score": round(float(rs), 3) if rs is not None else None,
+			"score": round(float(dense), 3) if dense is not None else None, "shown": bool(shown)})
+	return out
 
 
 def _filter(ctx, category=None, disease=None):
@@ -712,22 +790,41 @@ def _dense_scores(query, points):
 
 
 @frappe.whitelist()
-def search(query, limit=5, category=None, disease=None, audience=None, region=None, language=None, include_drafts=0):
-	"""Best passages for a question (hybrid search + re-rank), returned verbatim. Used by the chatbot."""
+def search(query, limit=5, category=None, disease=None, audience=None, region=None, language=None, include_drafts=0,
+		correlation_id=None, channel=None):
+	"""Best passages for a question (hybrid search + re-rank), returned verbatim. Used by the chatbot.
+	Every call, allowed or denied, is written to the Chatbot Query Log (level Retrieval)."""
 	started = time.monotonic()
-	ctx = _access_context(audience, region, include_drafts)
-	query = (query or "").strip()
-	if not query:
-		frappe.throw(_("Query is empty."))
-	if language and language not in LANGUAGES:
-		frappe.throw(_("Language must be one of: {0}").format(", ".join(LANGUAGES)))
+	audit = _Audit("kb_search", "Retrieval", query, language, correlation_id, channel or "API")
+	try:
+		ctx = _access_context(audience, region, include_drafts)
+		query = (query or "").strip()
+		if not query:
+			frappe.throw(_("Query is empty."))
+		if language and language not in LANGUAGES:
+			frappe.throw(_("Language must be one of: {0}").format(", ".join(LANGUAGES)))
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		audit.denied(e)
+		raise
+	audit.context(ctx)
 	limit = max(1, min(cint(limit) or 5, MAX_LIMIT))
 	t = _thresholds()
-	detected, ranked = _retrieve(query, ctx, category, disease, language, limit)
+	try:
+		detected, ranked = _retrieve(query, ctx, category, disease, language, limit)
+	except KBUnavailable as e:
+		audit.failed(e)
+		raise
 	points = [h for _, h in ranked]
 	sims = _dense_scores(query, points) if points else []
 	results = [_result(h.id, s, h.payload, t) | {"rank_score": round(rs, 3)}
 		for (rs, h), s in zip(ranked, sims)]
+	top = results[0] if results else None
+	audit.done(
+		outcome="Matched" if top else "No Match", reason="results" if top else "no_results",
+		match_confidence=top["score"] if top else None, confidence_band=top["confidence"] if top else None,
+		matched_document=top["doc"] if top else None, matched_content_version=top["version"] if top else None,
+		passages=_passage_trace([(rs, s, h, False) for (rs, h), s in zip(ranked, sims)]),
+	)
 	return {
 		"query": query,
 		"count": len(results),
@@ -736,6 +833,8 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 		"score_range": [0, 1],
 		"confidence_thresholds": t,
 		"took_ms": int((time.monotonic() - started) * 1000),
+		"log_id": audit.name,
+		"correlation_id": audit.correlation_id,
 	}
 
 
@@ -818,7 +917,7 @@ def _history_messages(history):
 
 @frappe.whitelist(methods=["POST"])
 def ask(query, language=None, history=None, stream_id=None, category=None, disease=None,
-		audience=None, region=None, include_drafts=0):
+		audience=None, region=None, include_drafts=0, correlation_id=None, channel=None):
 	"""One grounded answer to a question, with the sources it used.
 
 	stream_id: when given, tokens are pushed live to this user over realtime event "kb_answer"
@@ -827,10 +926,16 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	mode: "answer" (LLM answer) | "not_found" | "passages" (LLM unavailable: best passages only)
 	"""
 	started = time.monotonic()
-	ctx = _access_context(audience, region, include_drafts)
-	query = (query or "").strip()
-	if not query:
-		frappe.throw(_("Query is empty."))
+	audit = _Audit("kb_ask", "Conversation", query, language, correlation_id, channel or "Web")
+	try:
+		ctx = _access_context(audience, region, include_drafts)
+		query = (query or "").strip()
+		if not query:
+			frappe.throw(_("Query is empty."))
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		audit.denied(e)
+		raise
+	audit.context(ctx)
 	language = language if language in LANGUAGES else "English"
 	t = _thresholds()
 	hist = _history_messages(history)
@@ -838,27 +943,39 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	# short follow-ups ("what about children?") are searched together with the previous question
 	last_user = next((m["content"] for m in reversed(hist) if m["role"] == "user"), "")
 	search_q = f"{last_user} {query}" if last_user and len(query.split()) <= 6 else query
-	detected, ranked = _retrieve(search_q, ctx, category, disease, language, CONTEXT_PASSAGES)
+	try:
+		detected, ranked = _retrieve(search_q, ctx, category, disease, language, CONTEXT_PASSAGES)
+	except KBUnavailable as e:
+		audit.failed(e)
+		raise
 
 	def push(payload):
 		if stream_id:
 			frappe.publish_realtime("kb_answer", {"stream_id": stream_id, **payload}, user=frappe.session.user)
 
-	def finish(answer, mode, sources, used):
-		push({"done": True, "mode": mode})
+	def finish(answer, mode, sources, used, trace=None, **log_fields):
+		top = next((s for s in sources if s["n"] in used), None) if used else None
+		outcome = {"answer": "Matched", "passages": "Matched", "not_found": "No Match"}.get(mode, "Matched")
+		audit.done(outcome=outcome, reason=mode, answer=answer, answer_mode=mode,
+			match_confidence=top["score"] if top else None, confidence_band=top["confidence"] if top else None,
+			matched_document=top["doc"] if top else None, matched_content_version=top["version"] if top else None,
+			passages=trace, **log_fields)
+		push({"done": True, "mode": mode, "log_id": audit.name})
 		return {"query": query, "answer": answer, "mode": mode, "sources": sources, "used_sources": used,
 			"detected_disease": {"key": detected["key"], "name": detected["name"]} if detected else None,
-			"language": language, "took_ms": int((time.monotonic() - started) * 1000)}
+			"language": language, "took_ms": int((time.monotonic() - started) * 1000),
+			"log_id": audit.name, "correlation_id": audit.correlation_id}
 
 	min_score = float(_conf("kb_min_rerank_score", 0.15))
 	if not ranked or (_rerank_model() and ranked[0][0] < min_score):
 		answer = NOT_FOUND[language]
 		push({"delta": answer})
-		return finish(answer, "not_found", [], [])
+		return finish(answer, "not_found", [], [], _passage_trace([(rs, None, h, False) for rs, h in ranked]))
 
 	points = [h for _, h in ranked]
 	dense = _dense_scores(query, points)
 	sources = [_source(i, rs, d, p, t) for i, ((rs, p), d) in enumerate(zip(ranked, dense), 1)]
+	trace = _passage_trace([(rs, d, p, True) for (rs, p), d in zip(ranked, dense)])
 
 	messages = [{"role": "system", "content": SYSTEM_PROMPT.format(language=language)}, *hist,
 		{"role": "user", "content": f"Sources:\n\n{_context_block(points)}\n\nQuestion: {query}"}]
@@ -878,21 +995,21 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 
 	try:
 		answer = _llm_chat(messages, on_token if stream_id else None).strip()
-	except Exception:
+	except Exception as e:
 		frappe.log_error(title="Knowledge Base: LLM unavailable, returned passages only")
 		answer = "\n\n".join(f"{s['text']} [{s['n']}]" for s in sources[:2])
 		push({"delta": answer})
-		return finish(answer, "passages", sources, [s["n"] for s in sources[:2]])
+		return finish(answer, "passages", sources, [s["n"] for s in sources[:2]], trace, error=f"LLM: {e}"[:300])
 
 	if "NOT_IN_SOURCES" in answer:
 		answer = NOT_FOUND[language]
 		push({"delta": answer})
-		return finish(answer, "not_found", [], [])
+		return finish(answer, "not_found", [], [], trace)
 	if buffer["held"] and stream_id:
 		push({"delta": answer})
 
 	used = sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer) if 0 < int(n) <= len(sources)})
-	return finish(answer, "answer", sources, used or [s["n"] for s in sources[:1]])
+	return finish(answer, "answer", sources, used or [s["n"] for s in sources[:1]], trace)
 
 
 @frappe.whitelist()
@@ -911,16 +1028,30 @@ def llm_status():
 
 
 @frappe.whitelist()
-def get_passage(id, audience=None, region=None):
-	"""Fetch one passage by the id returned from search, with the same access rules."""
-	ctx = _access_context(audience, region)
+def get_passage(id, audience=None, region=None, correlation_id=None, channel=None):
+	"""Fetch one passage by the id returned from search, with the same access rules. Logged (level Retrieval)."""
+	audit = _Audit("kb_passage", "Retrieval", f"passage:{id}", None, correlation_id, channel or "API")
+	try:
+		ctx = _access_context(audience, region)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		audit.denied(e)
+		raise
+	audit.context(ctx)
 	client = _client()
 	points = []
 	if client.collection_exists(_collection()):
-		points = client.retrieve(_collection(), ids=[id], with_payload=True)
+		try:
+			points = client.retrieve(_collection(), ids=[id], with_payload=True)
+		except Exception:
+			points = []  # malformed id
 	if not points or not _visible(points[0].payload, ctx):
+		audit.done(outcome="Restricted" if points else "No Match", reason="not_visible" if points else "not_found",
+			access_decision="DENY" if points else "ALLOW", deny_reason_code="NOT_VISIBLE" if points else None)
 		frappe.throw(_("Passage not found or not available for this audience."), frappe.DoesNotExistError)
-	return _result(points[0].id, 1.0, points[0].payload, _thresholds()) | {"score": None, "confidence": None}
+	pl = points[0].payload
+	audit.done(outcome="Matched", reason="passage", matched_document=pl.get("doc"),
+		matched_content_version=pl.get("version"), passages=_passage_trace([(None, None, points[0], True)]))
+	return _result(points[0].id, 1.0, pl, _thresholds()) | {"score": None, "confidence": None, "log_id": audit.name}
 
 
 @frappe.whitelist()

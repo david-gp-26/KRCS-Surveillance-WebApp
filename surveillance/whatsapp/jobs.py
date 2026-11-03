@@ -300,38 +300,32 @@ def notify_desk(report, phone, reporter_role=None, danger_signs=None):
 
 
 def log_chatbot(request, response, session):
-	"""One line per question in logs/whatsapp.log, until Frappe has a Chatbot Query Log DocType
-	(agents/chatbot/docs/frappe_interface.md §5). Contains personal data: keep the logs private."""
-	protocol = response.get("protocol")
-	logger().info(
-		"[chatbot] "
-		+ json.dumps(
-			{
-				"request_id": response.get("request_id") or request["request_id"],
-				"user": request["user_ref"],
-				"roles": request["roles"],
-				"region": request["location"],
-				"language": request["language"],
-				"channel": "WhatsApp",
-				"question": request["message"],
-				"selected": request["selected_protocol_id"],
-				"route": response.get("route"),
-				"outcome": response.get("outcome"),
-				"reason": response.get("reason"),
-				"protocol": f"{protocol['protocol_id']}:{protocol['language']}:{protocol['source_version']}"
-				if protocol
-				else None,
-				"document": ((response.get("documents") or [{}])[0]).get("id"),
-				"latency_ms": response.get("latency_ms"),
-				"trace": response.get("trace"),
-			},
-			default=str,
-		)
-	)
+	"""One Chatbot Query Log record (level Conversation, channel WhatsApp) per question.
+	Contains personal data: read access needs view_chatbot_logs; retention per chatbot_log_retention_days."""
+	from surveillance import chatbot_log
+
+	staff = session.staff or {}
+	chatbot_log.log_conversation(request, response, channel="WhatsApp", user=staff.get("user"),
+		escalated_to=_escalation_target())
+
+
+def _escalation_target():
+	st = data.settings()
+	nums = numbers(st.escalation_numbers) or numbers(st.notify_numbers)
+	return ", ".join(nums) if nums else "WhatsApp escalation desk (no number set)"
 
 
 def on_escalate(question, session, request, reason, error=None, response=None):
+	from surveillance import chatbot_log
+
 	staff = session.staff or {}
+	if error:
+		# the service never answered, so no record was written by log_chatbot: write one now
+		chatbot_log.log_conversation(request, None, channel="WhatsApp", user=staff.get("user"), error=error,
+			escalated_to=_escalation_target())
+	else:
+		chatbot_log.update(chatbot_log.find_by_correlation(request.get("request_id")), escalated_to_human=1,
+			escalated_to=_escalation_target())
 	if staff:
 		who = staff.get("full_name") + (f" ({staff['role']})" if staff.get("role") else "")
 	else:
