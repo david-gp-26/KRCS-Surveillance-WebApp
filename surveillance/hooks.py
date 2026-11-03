@@ -195,6 +195,15 @@ doc_events = {
 	"Sub County": WHATSAPP_CATALOG,
 	"Symptom": WHATSAPP_CATALOG,
 	"Community Advice": WHATSAPP_CATALOG,
+	# Response Support Chatbot: reload the service when Active protocols or disease synonyms change (contract §4)
+	"Response Protocol": {
+		"on_update": "surveillance.chatbot.api.on_protocol_change",
+		"on_trash": "surveillance.chatbot.api.on_protocol_change",
+	},
+	"Alert Threshold Config": {
+		"on_update": "surveillance.chatbot.api.on_vocabulary_change",
+		"on_trash": "surveillance.chatbot.api.on_vocabulary_change",
+	},
 }
 # doc_events = {
 # 	"*": {
@@ -210,7 +219,8 @@ doc_events = {
 
 
 scheduler_events = {
-	"daily": ["surveillance.knowledge_base.retire_expired", "surveillance.knowledge_base.notify_upcoming_reviews", "surveillance.chatbot_log.purge_old_logs", "surveillance.context.import_weather",
+	"daily": ["surveillance.knowledge_base.retire_expired", "surveillance.knowledge_base.notify_upcoming_reviews", "surveillance.chatbot_log.purge_old_logs",
+		"surveillance.chatbot.api._reload", "surveillance.context.import_weather",
 		"surveillance.event_tasks.daily_reminders"],
 	"hourly_long": ["surveillance.cbs_feed.hourly", "surveillance.risk.refresh_open", "surveillance.push.check_receipts"],
 	"daily_long": ["surveillance.cbs_feed.daily"],

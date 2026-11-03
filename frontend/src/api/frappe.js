@@ -458,68 +458,26 @@ export function exportCsv(filename, rows, columns) {
   URL.revokeObjectURL(url)
 }
 
-const AI_MOCK_RESPONSES = [
-  {
-    match: /cholera/i,
-    answer: 'Here is the latest cholera case breakdown by region based on current surveillance data.',
-    table: {
-      columns: ['Region', 'Confirmed Cases', 'Suspected Cases', 'Trend'],
-      rows: [
-        ['Garissa', 42, 15, 'Rising'],
-        ['Dadaab', 31, 9, 'Rising'],
-        ['Wajir', 12, 6, 'Stable'],
-        ['Mombasa', 5, 2, 'Falling'],
-      ],
-    },
-  },
-  {
-    match: /alert/i,
-    answer: 'Found 4 active alerts matching your query, sorted by severity.',
-    table: {
-      columns: ['Alert ID', 'Signal', 'Location', 'Severity', 'Status'],
-      rows: [
-        ['ALT-021', 'Cholera Cluster', 'Dadaab', 'Critical', 'Open'],
-        ['ALT-018', 'Measles Spike', 'Garissa', 'High', 'Investigating'],
-        ['ALT-014', 'AWD Increase', 'Wajir', 'Medium', 'Open'],
-        ['ALT-009', 'Malnutrition Rise', 'Turkana', 'Medium', 'Closed'],
-      ],
-    },
-  },
-  {
-    match: /case|report/i,
-    answer: 'Here is a summary of recent case reports across all channels.',
-    table: {
-      columns: ['Status', 'Count'],
-      rows: [
-        ['Submitted', 28],
-        ['Reviewed', 54],
-        ['Linked', 12],
-        ['Investigating', 7],
-      ],
-    },
-  },
-]
-
-function buildMockAiAnswer(question) {
-  const hit = AI_MOCK_RESPONSES.find((r) => r.match.test(question))
-  if (hit) return { answer: hit.answer, table: hit.table }
-  const fallback = 'I looked into "' + question + '" but no matching data source is wired up yet. Try asking about cholera cases, alerts, or reports.'
-  return { answer: fallback }
-}
 
 /*
 |--------------------------------------------------------------------------
 | AI Data Assistant
 |--------------------------------------------------------------------------
 |
-| Backed by mock data for now. Once the backend AI/NL-to-query endpoint
-| exists, swap the body of queryAiAssistant() for a real API call that
-| resolves the same shape: { answer: string, table?: { columns, rows } }.
-| The page consuming this function only depends on that return shape.
+| Real data through the chatbot gateway: { answer, options, outcome, escalated, logId }.
 */
-export async function queryAiAssistant(question) {
-  await new Promise((resolve) => setTimeout(resolve, 600 + Math.random() * 500))
-  return buildMockAiAnswer(question)
+// Response Support Chatbot through the Frappe gateway (surveillance.chatbot.api.ask): protocol answers, report
+// counts and escalations, with the user's roles and region decided by the server. Clarify options come back as
+// `options`; pass the chosen protocol_id as selectedProtocolId.
+export async function queryAiAssistant(question, { language, selectedProtocolId } = {}) {
+  const r = await callMethodPost('surveillance.chatbot.api.ask', {
+    message: question, language, selected_protocol_id: selectedProtocolId,
+  })
+  const options = Array.isArray(r?.options) ? r.options : []
+  let answer = r?.message || ''
+  if (r?.outcome === 'routed' && !answer) answer = 'This looks like a case report. Use Report a case to submit it.'
+  if (options.length) answer += ['', '', ...options.map((o) => `${o.number}. ${o.title}`)].join('\n')
+  return { answer, options, outcome: r?.outcome, escalated: !!r?.escalate, logId: r?.log_id }
 }
 
 // ---------- Analytics ----------

@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-10-16 11:00:00.000000",
- "modified": "2026-10-19 12:00:00.000000",
+ "modified": "2026-11-03 18:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
  "module": "Surveillance",
@@ -21,6 +21,13 @@
   "source",
   "source_url",
   "review_date",
+  "chatbot_section",
+  "audience",
+  "language",
+  "location_applicability",
+  "effective_date",
+  "placeholder",
+  "icd11",
   "approved_by",
   "approved_on",
   "sb1",
@@ -87,6 +94,50 @@
    "fieldname": "review_date",
    "fieldtype": "Date",
    "label": "Next Review"
+  },
+  {
+   "fieldname": "chatbot_section",
+   "fieldtype": "Section Break",
+   "label": "Chatbot",
+   "collapsible": 1,
+   "description": "How the Response Support Chatbot serves this protocol. Only Approved protocols within their dates are sent to it."
+  },
+  {
+   "fieldname": "audience",
+   "fieldtype": "Small Text",
+   "label": "Audience (roles)",
+   "description": "Comma-separated Frappe roles. Blank = every surveillance role."
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Select",
+   "label": "Language",
+   "options": "en\nsw",
+   "default": "en"
+  },
+  {
+   "fieldname": "location_applicability",
+   "fieldtype": "Small Text",
+   "label": "Applies In",
+   "description": "Comma-separated regions. Blank = national."
+  },
+  {
+   "fieldname": "effective_date",
+   "fieldtype": "Date",
+   "label": "Effective Date",
+   "description": "Blank = from approval."
+  },
+  {
+   "fieldname": "placeholder",
+   "fieldtype": "Check",
+   "label": "Placeholder (test content)",
+   "description": "Replies are stamped NOT APPROVED FOR FIELD USE."
+  },
+  {
+   "fieldname": "icd11",
+   "fieldtype": "Table",
+   "label": "ICD-11 codes (KRCS selection)",
+   "options": "Response Protocol ICD11"
   },
   {
    "fieldname": "approved_by",

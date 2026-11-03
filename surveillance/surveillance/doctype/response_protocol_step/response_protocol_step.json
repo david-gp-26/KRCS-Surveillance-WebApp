@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-10-16 11:00:00.000000",
- "modified": "2026-10-30 16:00:00.000000",
+ "modified": "2026-11-03 18:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
  "module": "Surveillance",
@@ -16,6 +16,7 @@
   "timeframe",
   "responsible",
   "phase",
+  "action_stage",
   "assignable",
   "show_to_reporters"
  ],
@@ -47,6 +48,14 @@
    "default": "Investigation",
    "in_list_view": 1,
    "label": "Phase"
+  },
+  {
+   "fieldname": "action_stage",
+   "fieldtype": "Select",
+   "label": "Chatbot Stage",
+   "in_list_view": 0,
+   "options": "\nimmediate_action\nnotification\nisolation\nreferral\nipc\nspecimen_collection\ncommunity_action\nfollow_up",
+   "description": "Which chatbot answer this step belongs to. Blank: Investigation steps = immediate_action, Response steps = community_action."
   },
   {
    "fieldname": "assignable",

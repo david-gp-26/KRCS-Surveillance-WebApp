@@ -1,0 +1,46 @@
+{
+ "actions": [],
+ "creation": "2026-11-03 18:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "code",
+  "title",
+  "uri"
+ ],
+ "istable": 1,
+ "module": "Surveillance",
+ "name": "Response Protocol ICD11",
+ "owner": "Administrator",
+ "modified": "2026-11-03 18:00:00.000000",
+ "modified_by": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "fields": [
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "label": "Code",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "uri",
+   "fieldtype": "Data",
+   "label": "URI",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "WHO's licence requires code, title and URI together."
+  }
+ ]
+}
