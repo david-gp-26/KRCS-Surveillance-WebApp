@@ -72,7 +72,8 @@ class TestKBGovernance(FrappeTestCase):
 		self.assertEqual(frappe.db.get_value(kb.DOCTYPE, name, "approved_hash"), doc.content_hash)
 
 	def test_swapped_file_cannot_be_reindexed_under_old_approval(self):
-		name = self._upload("Swap doc", f"# S\n{WORDS} original swap")
+		# unique text: Frappe shares one stored file between uploads with identical content
+		name = self._upload("Swap doc", f"# S\n{WORDS} original swap {frappe.generate_hash(length=8)}")
 		self._approve(name)
 		path = frappe.get_doc("File", {"file_url": frappe.db.get_value(kb.DOCTYPE, name, "file")}).get_full_path()
 		with open(path, "w") as f:

@@ -332,6 +332,18 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
             <p className="text-xs text-gray-400 mt-1">{AUDIENCE_CLASSES.find((a) => a.value === audienceClass)?.help}</p>
           </div>
           <div>
+            <label className={LABEL}>Authority</label>
+            <SelectField value={values.authority || 'KRCS protocol'} onChange={(v) => setValues({ authority: v })}>
+              {['National guideline', 'KRCS protocol', 'Partner guidance', 'Other'].map((a) => <option key={a} value={a}>{a}</option>)}
+            </SelectField>
+            <p className="text-xs text-gray-400 mt-1">When documents disagree, higher authority is shown.</p>
+          </div>
+          <div>
+            <label className={LABEL}>Conflicts with</label>
+            <input value={values.conflictsWith || ''} onChange={(e) => setValues({ conflictsWith: e.target.value })} placeholder="e.g. KB-00012" className={INPUT} />
+            <p className="text-xs text-gray-400 mt-1">Document IDs giving different guidance. Equal authority is passed to a person.</p>
+          </div>
+          <div>
             <label className={LABEL}>Sensitivity</label>
             <SelectField value={sensitivity} onChange={(v) => setValues({ sensitivity: v })}>
               <option value="Standard">Standard</option>
@@ -445,6 +457,8 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
           sensitivity: opts.sensitivity,
           version: version.trim(),
           supersedes: supersedes?.id,
+          authority: opts.authority,
+          conflicts_with: opts.conflictsWith,
           review_date: opts.reviewDate,
           expiry_date: opts.expiryDate,
         })
@@ -587,6 +601,8 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     effectiveFrom: doc.effectiveFrom ? String(doc.effectiveFrom).slice(0, 10) : '',
     audienceClass: doc.audienceClass || DEFAULT_AUDIENCE_CLASS,
     sensitivity: doc.sensitivity || 'Standard',
+    authority: doc.authority || 'KRCS protocol',
+    conflictsWith: (doc.conflictsWith || []).join(', '),
   })
   const [saving, setSaving] = useState(false)
   const dateError = !!optionsDateError(opts)
@@ -598,6 +614,7 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
       category, version, applied_to: appliedTo.length ? appliedTo : [ALL_ROLES], diseases: opts.diseases,
       language: opts.language, regions: opts.regions, review_date: opts.reviewDate, expiry_date: opts.expiryDate,
       effective_from: opts.effectiveFrom, audience_class: opts.audienceClass, sensitivity: opts.sensitivity,
+      authority: opts.authority, conflicts_with: opts.conflictsWith,
     })
     setSaving(false)
   }

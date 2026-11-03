@@ -47,7 +47,12 @@ export default function KbAnswer({ result }) {
   const used = sources.filter((s) => usedSet.has(s.n))
   const unused = sources.filter((s) => !usedSet.has(s.n))
   const byN = new Map(sources.map((s) => [s.n, s]))
-  const notFound = result?.mode === 'not_found'
+  const notFound = result?.mode === 'not_found' || result?.mode === 'conflict'
+  const MODE_NOTE = {
+    verbatim: 'Quoted from approved documents.',
+    summary: 'Summary checked against the approved documents. Open a source to read the original.',
+    public: 'Approved public guidance.',
+  }
 
   function jump(n) {
     setOpenN(n)
@@ -112,6 +117,15 @@ export default function KbAnswer({ result }) {
 
   return (
     <div className="min-w-0 max-w-2xl text-[15px] leading-7 text-gray-800">
+      {MODE_NOTE[result?.mode] && (
+        <div className="mb-2 text-xs text-gray-500">{MODE_NOTE[result.mode]}</div>
+      )}
+      {result?.escalated && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs text-amber-700">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          Passed to {result.escalated_to || 'a person'} for a reply.
+        </div>
+      )}
       {result?.mode === 'passages' && (
         <div className="mb-2 flex items-center gap-1.5 text-xs text-amber-700">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />

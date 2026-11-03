@@ -9,3 +9,4 @@ surveillance.patches.add_user_management_fields
 surveillance.patches.kb_sync_effective_dates
 surveillance.patches.kb_sync_audience_class
 surveillance.patches.kb_governance_backfill
+surveillance.patches.kb_sync_authority

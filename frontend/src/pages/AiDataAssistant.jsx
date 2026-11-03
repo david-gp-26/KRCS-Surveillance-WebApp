@@ -210,15 +210,19 @@ export default function AiDataAssistant() {
             rt.off?.('kb_answer', handler)
             return
           }
+          if (data.status === 'checking') {
+            setLive({ streamId, text: 'Writing a summary and checking it against the approved documents…' })
+            return
+          }
           if (data.delta) {
-            setLive((prev) => ({ streamId, text: (prev?.streamId === streamId ? prev.text : '') + data.delta }))
+            setLive((prev) => ({ streamId, text: (prev?.streamId === streamId && !prev.checking ? prev.text : '') + data.delta }))
             scrollToBottom()
           }
         }
         if (rt) rt.on('kb_answer', handler)
         let result
         try {
-          result = await askKnowledgeBase({ query: question, language: queryLanguage, history, streamId })
+          result = await askKnowledgeBase({ query: question, language: queryLanguage, history, streamId, conversationId: chatId })
         } finally {
           rt?.off?.('kb_answer', handler)
           setLive(null)

@@ -26,6 +26,8 @@
   "applied_to",
   "audience_class",
   "sensitivity",
+  "authority",
+  "conflicts_with",
   "size_bytes",
   "index_section",
   "status",
@@ -114,6 +116,20 @@
    "options": "Standard\nSensitive",
    "default": "Standard",
    "description": "Sensitive documents are served only to users with View Sensitive Knowledge Base content. Public documents cannot be Sensitive."
+  },
+  {
+   "fieldname": "authority",
+   "fieldtype": "Select",
+   "label": "Authority",
+   "default": "KRCS protocol",
+   "options": "National guideline\nKRCS protocol\nPartner guidance\nOther",
+   "description": "When two documents disagree, the one with higher authority is shown. Equal authority is escalated to a person."
+  },
+  {
+   "fieldname": "conflicts_with",
+   "fieldtype": "Small Text",
+   "label": "Conflicts With",
+   "description": "Knowledge Document IDs (comma separated) that give different guidance on the same topic."
   },
   {
    "fieldname": "size_bytes",
@@ -228,7 +244,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-03 14:00:00.000000",
+ "modified": "2026-11-03 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "Knowledge Document",

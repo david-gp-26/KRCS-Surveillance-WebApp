@@ -919,11 +919,11 @@ async function kbRequest(method, params = {}, httpMethod = 'GET') {
 
 export const getKbDocuments = () => kbRequest('list_documents')
 
-export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes }) =>
-  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes }, 'POST')
+export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with }) =>
+  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with }, 'POST')
 
-export const updateKbDocument = (name, { category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }) =>
-  kbRequest('update_document', { name, category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity }, 'POST')
+export const updateKbDocument = (name, { category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with }) =>
+  kbRequest('update_document', { name, category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with }, 'POST')
 
 export const setKbApproval = (name, status) => kbRequest('set_approval', { name, status }, 'POST')
 
@@ -934,8 +934,9 @@ export const deleteKbDocument = (name) => kbRequest('delete_document', { name },
 export const searchKnowledgeBase = ({ query, limit = 5, disease, category, language, includeDrafts, preview, audience } = {}) =>
   kbRequest('search', { query, limit, disease, category, language, audience, include_drafts: includeDrafts ? 1 : undefined, preview: preview ? 1 : undefined })
 
-export const askKnowledgeBase = ({ query, language, history = [], streamId } = {}) =>
-  kbRequest('ask', { query, language, history: JSON.stringify(history), stream_id: streamId }, 'POST')
+// history is kept on the server per conversation (conversationId); the client copy is only a fallback
+export const askKnowledgeBase = ({ query, language, history = [], streamId, conversationId, mode } = {}) =>
+  kbRequest('ask', { query, language, history: JSON.stringify(history), stream_id: streamId, conversation_id: conversationId, mode }, 'POST')
 
 export const getKbPassage = (id) => kbRequest('get_passage', { id })
 
