@@ -119,6 +119,10 @@ CAPABILITIES = [
 	 "description": "Search approved knowledge base documents for your own role", "grants": {}},
 	{"key": "kb_service", "name": "Knowledge Base Service Access", "category": "Knowledge Base",
 	 "description": "Search on behalf of another role (chatbot service account only)", "grants": {}},
+	{"key": "view_sensitive_kb", "name": "View Sensitive Knowledge Base Content", "category": "Knowledge Base",
+	 "description": "Read Knowledge Base documents marked Sensitive", "grants": {}},
+	{"key": "view_restricted_kb", "name": "View Restricted Knowledge Base Content", "category": "Knowledge Base",
+	 "description": "Read Knowledge Base documents with audience class Restricted", "grants": {}},
 ]
 CAPABILITIES += [
 	# Workspaces: which simple dashboard and menu a role gets. Admins never get these automatically.

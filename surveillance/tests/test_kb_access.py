@@ -193,4 +193,4 @@ class TestKBAccess(FrappeTestCase):
 		r = kb.search(WORDS, on_behalf_of=CHP_A, correlation_id="cid-obo-1")
 		frappe.set_user("Administrator")
 		row = frappe.get_doc("Chatbot Query Log", r["log_id"])
-		self.assertEqual((row.user, row.caller, row.access_policy_version), (CHP_A, SERVICE, "kb-access-2"))
+		self.assertEqual((row.user, row.caller, row.access_policy_version), (CHP_A, SERVICE, kb.ACCESS_POLICY_VERSION))

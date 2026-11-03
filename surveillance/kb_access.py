@@ -21,6 +21,9 @@ MayAccess (R62) is evaluated as:
                        and the WhatsApp channel uses the same rule)
     Capability         the end user holds use_knowledge_base (public actors: public guidance must be enabled)
     Audience / scope   applied as a filter on approval, audience roles and region, inside Qdrant
+    AudienceClass      Public actors: class Public only. Staff: classes up to their level (kb_chw_roles -> CHW,
+                       other staff -> Professional, view_restricted_kb -> Restricted). Sensitive documents need
+                       view_sensitive_kb.
     ResourceActive / WithinEffectiveDates   approval Approved, effective_from <= today <= expiry (and review date
                        when kb_hide_after_review_date, default on), also inside Qdrant
 """
@@ -30,13 +33,35 @@ from frappe.utils import cint
 
 from surveillance.capabilities import get_user_capabilities, has_capability
 
-POLICY_VERSION = "kb-access-2"
+POLICY_VERSION = "kb-access-3"
 MANAGE = "manage_knowledge_base"
 USE = "use_knowledge_base"
 SERVICE = "kb_service"
+SENSITIVE = "view_sensitive_kb"
+RESTRICTED = "view_restricted_kb"
 PUBLIC_PREFIXES = ("whatsapp:", "phone:", "sms:", "ussd:")
 ALL_ROLES = "All roles"
 ALL_REGIONS = "All regions"
+
+# Audience classes (R62 ActorClass). A document is served to an actor whose level is >= the document's level.
+# "All roles" in applied_to means every staff role and never includes Public: public actors need class Public.
+AUDIENCE_CLASSES = {"Public": 0, "Community Health Worker": 1, "Professional": 2, "Restricted": 3}
+DEFAULT_AUDIENCE_CLASS = "Community Health Worker"   # existing staff documents keep their current reach
+PUBLIC = "Public"
+
+
+def chw_roles():
+	"""Roles that read at community-health-worker level (site config kb_chw_roles, default CHP)."""
+	return set(_split(frappe.conf.get("kb_chw_roles") or "CHP"))
+
+
+def actor_level(user, roles, capabilities):
+	"""Highest audience class this staff user may read."""
+	if user == "Administrator" or RESTRICTED in capabilities:
+		return AUDIENCE_CLASSES["Restricted"]
+	if roles and not set(roles) <= chw_roles():
+		return AUDIENCE_CLASSES["Professional"]
+	return AUDIENCE_CLASSES["Community Health Worker"]
 
 
 class KBAccessDenied(frappe.PermissionError):
@@ -83,19 +108,27 @@ def _user_row(user):
 
 def _staff_context(user, row):
 	roles = sorted(set(frappe.get_roles(user)) & surveillance_roles())
+	caps = set(get_user_capabilities(user))
+	level = actor_level(user, roles, caps)
 	return {
-		"user": user, "user_ref": user, "actor_class": "Staff", "roles": roles,
+		"user": user, "user_ref": user, "roles": roles,
+		"actor_class": "Community Health Worker" if level == 1 else "Staff",
 		"regions": [row.assigned_region] if row.get("assigned_region") else None,
 		"sub_county": row.get("assigned_sub_county"),
-		"capabilities": get_user_capabilities(user),
+		"capabilities": caps, "max_level": level, "public_only": False, "sensitive": SENSITIVE in caps or user == "Administrator",
 	}
 
 
 def _public_context(ref):
 	if not cint(frappe.conf.get("kb_public_enabled")):
 		_deny("PUBLIC_NOT_ENABLED", _("Public guidance is not enabled."))
-	return {"user": None, "user_ref": ref, "actor_class": "Public", "roles": [], "regions": None,
-		"sub_county": None, "capabilities": set()}
+	return _public_ctx(None, ref)
+
+
+def _public_ctx(user, ref, actor_class="Public"):
+	"""Public actors read approved class-Public, non-sensitive documents only, in every region."""
+	return {"user": user, "user_ref": ref, "actor_class": actor_class, "roles": [], "regions": None,
+		"sub_county": None, "capabilities": set(), "max_level": 0, "public_only": True, "sensitive": False}
 
 
 def resolve(on_behalf_of=None, audience=None, region=None, include_drafts=0, preview=0):
@@ -144,7 +177,8 @@ def resolve(on_behalf_of=None, audience=None, region=None, include_drafts=0, pre
 			_deny("NO_CAPABILITY")
 		ctx = _staff_context(caller, caller_row or frappe._dict()) if caller != "Administrator" else \
 			{"user": caller, "user_ref": caller, "actor_class": "Staff", "roles": [], "regions": None,
-				"sub_county": None, "capabilities": get_user_capabilities(caller)}
+				"sub_county": None, "capabilities": set(get_user_capabilities(caller)), "max_level": 3,
+				"public_only": False, "sensitive": True}
 		ctx.update(approved_only=True, preview=False)
 	ctx["caller"] = caller
 	ctx["policy_version"] = POLICY_VERSION
@@ -175,8 +209,16 @@ def _clean_regions(region):
 
 
 def _preview_context(caller, audience, region, include_drafts):
+	"""audience may name roles, or "Public" to see exactly what a community member would get."""
+	if PUBLIC in _split(audience):
+		ctx = _public_ctx(caller, caller, "Editor preview")
+		ctx.update(approved_only=not cint(include_drafts), preview=True)
+		return ctx
+	roles = _clean_roles(audience) if audience else None
+	staff = [r for r in (roles or []) if r != ALL_ROLES]
 	return {"user": caller, "user_ref": caller, "actor_class": "Editor preview",
-		"roles": _clean_roles(audience) if audience else None,
+		"roles": roles, "public_only": False, "sensitive": True,
+		"max_level": None if roles is None else actor_level(None, staff or ["_any_staff_"], set()),
 		"regions": _clean_regions(region) if region else None, "sub_county": None,
 		"approved_only": not cint(include_drafts), "preview": True,
 		"capabilities": get_user_capabilities(caller)}
@@ -184,6 +226,7 @@ def _preview_context(caller, audience, region, include_drafts):
 
 def _legacy_service_context(audience, region):
 	"""Pre-November contract (audience/region named by the service). Off unless kb_allow_legacy_audience."""
-	return {"user": None, "user_ref": None, "actor_class": "Legacy service", "roles": _clean_roles(audience) or [],
+	roles = _clean_roles(audience) or []
+	return {"user": None, "user_ref": None, "actor_class": "Legacy service", "roles": roles,
 		"regions": _clean_regions(region), "sub_county": None, "approved_only": True, "preview": False,
-		"capabilities": set()}
+		"capabilities": set(), "max_level": actor_level(None, roles, set()), "public_only": False, "sensitive": False}

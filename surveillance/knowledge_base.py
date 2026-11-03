@@ -43,7 +43,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, getdate, now_datetime, today
 
-from surveillance import kb_access
+from surveillance import kb_access, kb_safety
 from surveillance.capabilities import has_capability, require_capability
 from surveillance.kb_access import KBAccessDenied  # noqa: F401  (re-exported for callers and tests)
 
@@ -56,6 +56,7 @@ APPROVAL_STATUSES = ("Draft", "Approved", "Retired")
 ALL_ROLES = "All roles"
 ALL_REGIONS = "All regions"
 LANGUAGES = ("English", "Kiswahili")
+SENSITIVITIES = ("Standard", "Sensitive")
 LANGUAGE_BOOST = 0.05   # added to the score of passages in the asker's language when ranking
 MAX_LIMIT = 20
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "md"}
@@ -74,7 +75,7 @@ NOT_FOUND = {
 	"Kiswahili": "Sikupata jibu la swali hili katika nyaraka zilizoidhinishwa za KRCS. Tafadhali wasiliana na msimamizi wako au mwongozo husika.",
 }
 INDEXED_FIELDS = ("doc", "category", "approval_status", "applied_to", "diseases", "regions", "language")
-INTEGER_FIELDS = ("valid_from", "valid_to")   # effective dates as YYYYMMDD, filtered inside Qdrant (R62)
+INTEGER_FIELDS = ("valid_from", "valid_to", "audience_level")   # effective dates as YYYYMMDD, filtered inside Qdrant (R62)
 OPEN_START, OPEN_END = 0, 99991231
 
 _model = None
@@ -185,6 +186,10 @@ def _ensure_collection(client, size):
 			client.create_payload_index(name, field_name=field, field_schema=PayloadSchemaType.INTEGER)
 		except Exception:
 			pass
+	try:
+		client.create_payload_index(name, field_name="sensitive", field_schema=PayloadSchemaType.BOOL)
+	except Exception:
+		pass
 	return name
 
 
@@ -236,7 +241,11 @@ def valid_window(doc):
 def _access_payload(doc):
 	"""Fields used for filtering and citation; updated on every chunk without re-indexing."""
 	valid_from, valid_to = valid_window(doc)
+	audience_class = doc.get("audience_class") or kb_access.DEFAULT_AUDIENCE_CLASS
 	return {
+		"audience_class": audience_class,
+		"audience_level": kb_access.AUDIENCE_CLASSES.get(audience_class, 1),
+		"sensitive": (doc.get("sensitivity") or "Standard") == "Sensitive",
 		"valid_from": valid_from,
 		"valid_to": valid_to,
 		"effective_from": str(doc.effective_from) if doc.get("effective_from") else None,
@@ -262,6 +271,12 @@ def _clean_regions(value):
 
 
 def _check_dates(doc):
+	if (doc.get("audience_class") or kb_access.DEFAULT_AUDIENCE_CLASS) not in kb_access.AUDIENCE_CLASSES:
+		frappe.throw(_("Audience class must be one of: {0}").format(", ".join(kb_access.AUDIENCE_CLASSES)))
+	if (doc.get("sensitivity") or "Standard") not in SENSITIVITIES:
+		frappe.throw(_("Sensitivity must be one of: {0}").format(", ".join(SENSITIVITIES)))
+	if doc.get("audience_class") == kb_access.PUBLIC and doc.get("sensitivity") == "Sensitive":
+		frappe.throw(_("A Public document cannot be Sensitive."))
 	if doc.get("language") and doc.language not in LANGUAGES:
 		frappe.throw(_("Language must be one of: {0}").format(", ".join(LANGUAGES)))
 	if doc.get("review_date") and doc.get("expiry_date") and getdate(doc.review_date) > getdate(doc.expiry_date):
@@ -431,6 +446,8 @@ def _row(d):
 		"reviewDate": str(d.review_date) if d.get("review_date") else None,
 		"expiryDate": str(d.expiry_date) if d.get("expiry_date") else None,
 		"effectiveFrom": str(d.effective_from) if d.get("effective_from") else None,
+		"audienceClass": d.get("audience_class") or kb_access.DEFAULT_AUDIENCE_CLASS,
+		"sensitivity": d.get("sensitivity") or "Standard",
 		"approvalStatus": (d.get("approval_status") or "Draft").lower(),
 		"approvedBy": frappe.utils.get_fullname(d.approved_by) if d.get("approved_by") else None,
 		"approvedAt": str(d.approved_on) if d.get("approved_on") else None,
@@ -448,7 +465,8 @@ def list_documents():
 
 @frappe.whitelist(methods=["POST"])
 def create_document(file_url, category, applied_to=None, version="v1.0", diseases=None,
-		regions=None, language="English", review_date=None, expiry_date=None, effective_from=None):
+		regions=None, language="English", review_date=None, expiry_date=None, effective_from=None,
+		audience_class=None, sensitivity=None):
 	"""Register an already uploaded file (via /api/method/upload_file) and queue indexing. Starts as Draft."""
 	require_capability(CAPABILITY)
 	f = frappe.get_doc("File", {"file_url": file_url})
@@ -464,6 +482,8 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		"regions": _clean_regions(regions), "language": language or "English",
 		"review_date": review_date or None, "expiry_date": expiry_date or None,
 		"effective_from": effective_from or None,
+		"audience_class": audience_class or kb_access.DEFAULT_AUDIENCE_CLASS,
+		"sensitivity": sensitivity or "Standard",
 		"size_bytes": cint(f.file_size), "status": "Processing",
 	})
 	_check_dates(doc)
@@ -475,7 +495,8 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 
 @frappe.whitelist(methods=["POST"])
 def update_document(name, category=None, applied_to=None, diseases=None, version=None,
-		regions=None, language=None, review_date=None, expiry_date=None, effective_from=None):
+		regions=None, language=None, review_date=None, expiry_date=None, effective_from=None,
+		audience_class=None, sensitivity=None):
 	"""Edit document details. Everything is copied to Qdrant without re-embedding."""
 	require_capability(CAPABILITY)
 	doc = frappe.get_doc(DOCTYPE, name)
@@ -497,6 +518,10 @@ def update_document(name, category=None, applied_to=None, diseases=None, version
 		doc.expiry_date = expiry_date or None
 	if effective_from is not None:
 		doc.effective_from = effective_from or None
+	if audience_class is not None:
+		doc.audience_class = audience_class or kb_access.DEFAULT_AUDIENCE_CLASS
+	if sensitivity is not None:
+		doc.sensitivity = sensitivity or "Standard"
 	_check_dates(doc)
 	doc.save(ignore_permissions=True)
 	_sync_access(doc)
@@ -609,7 +634,7 @@ class _Audit:
 			"user": ctx.get("user"), "user_ref": ctx.get("user_ref"), "actor_class": ctx.get("actor_class"),
 			"access_policy_version": ctx.get("policy_version") or ACCESS_POLICY_VERSION,
 			"access_decision": "ALLOW",
-			"audience_roles": "ALL (editor)" if ctx["roles"] is None else ", ".join(ctx["roles"]) or "-",
+			"audience_roles": "PUBLIC" if ctx.get("public_only") else ("ALL (editor)" if ctx["roles"] is None else ", ".join(ctx["roles"]) or "-"),
 			"scope": "ALL" if ctx["regions"] is None else ", ".join(ctx["regions"]),
 			"preview": 1 if ctx.get("preview") else 0,
 		})
@@ -643,6 +668,7 @@ def _passage_trace(scored):
 	for rs, dense, p, shown in scored:
 		pl = p.payload
 		out.append({"id": str(p.id), "doc": pl.get("doc"), "version": pl.get("version"), "section": pl.get("section"),
+			"audience_class": pl.get("audience_class"),
 			"rank_score": round(float(rs), 3) if rs is not None else None,
 			"score": round(float(dense), 3) if dense is not None else None, "shown": bool(shown)})
 	return out
@@ -658,15 +684,24 @@ def _filter(ctx, category=None, disease=None):
 		now = _day(today())
 		must.append(FieldCondition(key="valid_from", range=Range(lte=now)))
 		must.append(FieldCondition(key="valid_to", range=Range(gte=now)))
-	if ctx["roles"] is not None:
-		must.append(FieldCondition(key="applied_to", match=MatchAny(any=[ALL_ROLES] + ctx["roles"])))
+	must_not = []
+	if ctx.get("public_only"):
+		# public actors: class Public only, whatever applied_to says ("All roles" means staff) (R73, R77)
+		must.append(FieldCondition(key="audience_level", match=MatchValue(value=0)))
+	else:
+		if ctx["roles"] is not None:
+			must.append(FieldCondition(key="applied_to", match=MatchAny(any=[ALL_ROLES] + ctx["roles"])))
+		if ctx.get("max_level") is not None:
+			must_not.append(FieldCondition(key="audience_level", range=Range(gt=ctx["max_level"])))
+	if not ctx.get("sensitive", True):
+		must_not.append(FieldCondition(key="sensitive", match=MatchValue(value=True)))
 	if ctx["regions"] is not None:
 		must.append(FieldCondition(key="regions", match=MatchAny(any=[ALL_REGIONS] + ctx["regions"])))
 	if category:
 		must.append(FieldCondition(key="category", match=MatchValue(value=category)))
 	if disease:
 		must.append(FieldCondition(key="diseases", match=MatchValue(value=disease)))
-	return Filter(must=must) if must else None
+	return Filter(must=must or None, must_not=must_not or None) if (must or must_not) else None
 
 
 def _visible(payload, ctx):
@@ -675,7 +710,16 @@ def _visible(payload, ctx):
 		return False
 	if ctx["approved_only"] and _expired(payload):
 		return False
-	if ctx["roles"] is not None and not ({ALL_ROLES, *ctx["roles"]} & set(payload.get("applied_to") or [ALL_ROLES])):
+	level = payload.get("audience_level")
+	if ctx.get("public_only"):
+		if level != 0:
+			return False
+	else:
+		if ctx["roles"] is not None and not ({ALL_ROLES, *ctx["roles"]} & set(payload.get("applied_to") or [ALL_ROLES])):
+			return False
+		if ctx.get("max_level") is not None and level is not None and cint(level) > ctx["max_level"]:
+			return False
+	if not ctx.get("sensitive", True) and payload.get("sensitive"):
 		return False
 	if ctx["regions"] is not None and not ({ALL_REGIONS, *ctx["regions"]} & set(payload.get("regions") or [ALL_REGIONS])):
 		return False
@@ -709,6 +753,8 @@ def _result(point_id, score, p, t):
 		"review_date": p.get("review_date"),
 		"expiry_date": p.get("expiry_date"),
 		"approval_status": p.get("approval_status"),
+		"audience_class": p.get("audience_class"),
+		"sensitive": bool(p.get("sensitive")),
 	}
 
 
@@ -830,9 +876,21 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 	sims = _dense_scores(query, points) if points else []
 	results = [_result(h.id, s, h.payload, t) | {"rank_score": round(rs, 3)}
 		for (rs, h), s in zip(ranked, sims)]
+	public, withheld = None, []
+	if ctx.get("public_only"):
+		# public path never diagnoses or prescribes (R75, R76): withhold any passage that reads like one
+		withheld = [r for r in results if not kb_safety.is_safe(r["text"])]
+		results = [r for r in results if r not in withheld]
+		lang = language or "English"
+		public = {"reply": kb_safety.public_reply([r["text"] for r in results[:1]], lang),
+			"notice": kb_safety.public_notice(lang), "withheld": len(withheld)}
 	top = results[0] if results else None
+	outcome, reason = ("Matched", "results") if top else ("No Match", "no_results")
+	if withheld and not top:
+		outcome, reason = "Escalated", "public_safety"
 	audit.done(
-		outcome="Matched" if top else "No Match", reason="results" if top else "no_results",
+		outcome=outcome, reason=reason, answer=public["reply"] if public else None,
+		answer_mode="public" if public else None,
 		match_confidence=top["score"] if top else None, confidence_band=top["confidence"] if top else None,
 		matched_document=top["doc"] if top else None, matched_content_version=top["version"] if top else None,
 		passages=_passage_trace([(rs, s, h, False) for (rs, h), s in zip(ranked, sims)]),
@@ -847,6 +905,8 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 		"took_ms": int((time.monotonic() - started) * 1000),
 		"log_id": audit.name,
 		"correlation_id": audit.correlation_id,
+		"actor_class": ctx.get("actor_class"),
+		"public": public,
 	}
 
 
@@ -966,10 +1026,12 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 		if stream_id:
 			frappe.publish_realtime("kb_answer", {"stream_id": stream_id, **payload}, user=frappe.session.user)
 
-	def finish(answer, mode, sources, used, trace=None, **log_fields):
+	def finish(answer, mode, sources, used, trace=None, reason_override=None, **log_fields):
 		top = next((s for s in sources if s["n"] in used), None) if used else None
 		outcome = {"answer": "Matched", "passages": "Matched", "not_found": "No Match"}.get(mode, "Matched")
-		audit.done(outcome=outcome, reason=mode, answer=answer, answer_mode=mode,
+		if reason_override == "public_safety":
+			outcome = "Escalated"
+		audit.done(outcome=outcome, reason=reason_override or mode, answer=answer, answer_mode=mode,
 			match_confidence=top["score"] if top else None, confidence_band=top["confidence"] if top else None,
 			matched_document=top["doc"] if top else None, matched_content_version=top["version"] if top else None,
 			passages=trace, **log_fields)
@@ -989,6 +1051,15 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	dense = _dense_scores(query, points)
 	sources = [_source(i, rs, d, p, t) for i, ((rs, p), d) in enumerate(zip(ranked, dense), 1)]
 	trace = _passage_trace([(rs, d, p, True) for (rs, p), d in zip(ranked, dense)])
+
+	if ctx.get("public_only"):
+		# public actors never get generated text: one approved passage, verbatim, in the fixed template (R74-R76)
+		safe = [s for s in sources if kb_safety.is_safe(s["text"])]
+		answer = kb_safety.public_reply([safe[0]["text"]] if safe else [], language)
+		push({"delta": answer})
+		if not safe:
+			return finish(answer, "not_found", [], [], trace, reason_override="public_safety")
+		return finish(answer, "public", safe[:1], [safe[0]["n"]], trace)
 
 	messages = [{"role": "system", "content": SYSTEM_PROMPT.format(language=language)}, *hist,
 		{"role": "user", "content": f"Sources:\n\n{_context_block(points)}\n\nQuestion: {query}"}]

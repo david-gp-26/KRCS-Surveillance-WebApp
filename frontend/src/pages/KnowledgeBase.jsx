@@ -36,6 +36,14 @@ const LANGUAGES = [
   { value: 'Kiswahili', label: 'Kiswahili', short: 'SW' },
 ]
 const DATE_HELP = 'Expired documents are removed from search automatically.'
+const AUDIENCE_CLASSES = [
+  { value: 'Public', label: 'Public', help: 'Community members (WhatsApp). Only Public documents are ever shown to them.' },
+  { value: 'Community Health Worker', label: 'Community Health Worker', help: 'CHPs and all other staff.' },
+  { value: 'Professional', label: 'Professional', help: 'Officers, clinicians and specialists. Not CHPs.' },
+  { value: 'Restricted', label: 'Restricted', help: 'Only users allowed to see restricted content.' },
+]
+const DEFAULT_AUDIENCE_CLASS = 'Community Health Worker'
+const AUDIENCE_SHORT = { Public: 'Public', 'Community Health Worker': 'CHW', Professional: 'Professional', Restricted: 'Restricted' }
 const ACCEPTED = ['pdf', 'docx', 'txt', 'md']
 const MAX_BYTES = 25 * 1024 * 1024
 
@@ -278,8 +286,12 @@ function optionsDateError({ effectiveFrom, reviewDate, expiryDate }) {
 function MoreOptions({ values, setValues, diseaseOptions, regionOptions, diseaseNames }) {
   const [open, setOpen] = useState(false)
   const { diseases, language, regions, reviewDate, expiryDate, effectiveFrom } = values
+  const audienceClass = values.audienceClass || DEFAULT_AUDIENCE_CLASS
+  const sensitivity = values.sensitivity || 'Standard'
   const dateError = optionsDateError(values)
   const summary = [
+    AUDIENCE_SHORT[audienceClass] || audienceClass,
+    sensitivity === 'Sensitive' ? 'Sensitive' : null,
     language || 'English',
     regions.includes(ALL_REGIONS) ? 'All regions' : regions.join(', '),
     diseases.length ? diseases.map((k) => diseaseNames[k] || k).join(', ') : 'No diseases',
@@ -301,6 +313,21 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
           <div className="sm:col-span-2">
             <label className={LABEL}>Diseases</label>
             <MultiSelectDropdown label="Select diseases" options={diseaseOptions} selected={diseases} onChange={(v) => setValues({ diseases: v })} />
+          </div>
+          <div>
+            <label className={LABEL}>Audience class</label>
+            <SelectField value={audienceClass} onChange={(v) => setValues(v === 'Public' ? { audienceClass: v, sensitivity: 'Standard' } : { audienceClass: v })}>
+              {AUDIENCE_CLASSES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </SelectField>
+            <p className="text-xs text-gray-400 mt-1">{AUDIENCE_CLASSES.find((a) => a.value === audienceClass)?.help}</p>
+          </div>
+          <div>
+            <label className={LABEL}>Sensitivity</label>
+            <SelectField value={sensitivity} onChange={(v) => setValues({ sensitivity: v })}>
+              <option value="Standard">Standard</option>
+              {audienceClass !== 'Public' && <option value="Sensitive">Sensitive</option>}
+            </SelectField>
+            <p className="text-xs text-gray-400 mt-1">Sensitive documents are shown only to users allowed to see sensitive content.</p>
           </div>
           <div>
             <label className={LABEL}>Language</label>
@@ -332,7 +359,7 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
   )
 }
 
-const EMPTY_OPTIONS = { diseases: [], language: 'English', regions: [ALL_REGIONS], effectiveFrom: '', reviewDate: '', expiryDate: '' }
+const EMPTY_OPTIONS = { diseases: [], language: 'English', regions: [ALL_REGIONS], effectiveFrom: '', reviewDate: '', expiryDate: '', audienceClass: DEFAULT_AUDIENCE_CLASS, sensitivity: 'Standard' }
 
 function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOptions, diseaseNames, onUploaded }) {
   const [files, setFiles] = useState([])
@@ -385,6 +412,8 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
           language: opts.language,
           regions: opts.regions,
           effective_from: opts.effectiveFrom,
+          audience_class: opts.audienceClass,
+          sensitivity: opts.sensitivity,
           review_date: opts.reviewDate,
           expiry_date: opts.expiryDate,
         })
@@ -516,6 +545,8 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     reviewDate: doc.reviewDate ? String(doc.reviewDate).slice(0, 10) : '',
     expiryDate: doc.expiryDate ? String(doc.expiryDate).slice(0, 10) : '',
     effectiveFrom: doc.effectiveFrom ? String(doc.effectiveFrom).slice(0, 10) : '',
+    audienceClass: doc.audienceClass || DEFAULT_AUDIENCE_CLASS,
+    sensitivity: doc.sensitivity || 'Standard',
   })
   const [saving, setSaving] = useState(false)
   const dateError = !!optionsDateError(opts)
@@ -526,7 +557,7 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     await onSave({
       category, version, applied_to: appliedTo.length ? appliedTo : [ALL_ROLES], diseases: opts.diseases,
       language: opts.language, regions: opts.regions, review_date: opts.reviewDate, expiry_date: opts.expiryDate,
-      effective_from: opts.effectiveFrom,
+      effective_from: opts.effectiveFrom, audience_class: opts.audienceClass, sensitivity: opts.sensitivity,
     })
     setSaving(false)
   }
@@ -649,7 +680,7 @@ const EMPTY_FILTERS = { category: '', role: '', language: '', region: '', indexi
 function TestSearch() {
   const [query, setQuery] = useState('')
   const [drafts, setDrafts] = useState(true)
-  const [preview, setPreview] = useState(true)
+  const [viewAs, setViewAs] = useState('all')
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -662,7 +693,7 @@ function TestSearch() {
     setError('')
     setExpanded({})
     try {
-      const res = await searchKnowledgeBase({ query: query.trim(), limit: 5, includeDrafts: drafts, preview })
+      const res = await searchKnowledgeBase({ query: query.trim(), limit: 5, includeDrafts: drafts && viewAs !== 'me', preview: viewAs === 'all', audience: viewAs === 'public' ? 'Public' : undefined })
       setResults(Array.isArray(res) ? res : res?.results || [])
     } catch (err) {
       setError(err.message || 'Search failed')
@@ -683,9 +714,13 @@ function TestSearch() {
           <input type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} className="accent-red-600" />
           Include drafts
         </label>
-        <label className="flex items-center gap-2 text-sm text-gray-700" title="Off: search as yourself, seeing only what your own role and region allow">
-          <input type="checkbox" checked={preview || drafts} disabled={drafts} onChange={(e) => setPreview(e.target.checked)} className="accent-red-600" />
-          All audiences
+        <label className="flex items-center gap-2 text-sm text-gray-700">
+          View as
+          <select value={viewAs} onChange={(e) => setViewAs(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-2 text-sm bg-white" aria-label="View as">
+            <option value="all">All audiences</option>
+            <option value="public">A community member (Public)</option>
+            <option value="me">Myself</option>
+          </select>
         </label>
         <button type="submit" disabled={loading || !query.trim()} className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-gray-200 text-white text-sm font-medium inline-flex items-center gap-2">
           {loading && <Loader2 className="w-4 h-4 animate-spin" />}{loading ? 'Searching…' : 'Search'}
@@ -708,6 +743,8 @@ function TestSearch() {
                   {r.confidence && <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${CONFIDENCE_STYLES[r.confidence] || CONFIDENCE_STYLES.low}`}>{r.confidence} match</span>}
                   {typeof r.score === 'number' && <span className="text-[11px] text-gray-400" title="How closely this passage matches the question">{Math.round(r.score * 100)}%</span>}
                   {approval && approval !== 'approved' && <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">{approval}</span>}
+                  {r.audience_class && <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{AUDIENCE_SHORT[r.audience_class] || r.audience_class}</span>}
+                  {r.sensitive && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">Sensitive</span>}
                 </div>
                 <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{expanded[key] || !long ? text : `${text.slice(0, 300)}…`}</p>
                 {long && (
@@ -1022,6 +1059,8 @@ export default function KnowledgeBase() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-gray-900 font-medium truncate max-w-[300px]" title={doc.name}>{doc.name}</span>
                                   <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 shrink-0">{langShort(doc.language)}</span>
+                                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${doc.audienceClass === 'Public' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'}`} title="Audience class">{AUDIENCE_SHORT[doc.audienceClass] || 'CHW'}</span>
+                                  {doc.sensitivity === 'Sensitive' && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 shrink-0">Sensitive</span>}
                                 </div>
                                 <div className="text-xs text-gray-400 mt-0.5">
                                   {doc.category} · {doc.version} · {doc.extension} · {formatBytes(doc.sizeBytes)}

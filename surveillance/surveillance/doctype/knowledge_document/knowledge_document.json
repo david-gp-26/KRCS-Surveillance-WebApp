@@ -21,6 +21,8 @@
   "col1",
   "category",
   "applied_to",
+  "audience_class",
+  "sensitivity",
   "size_bytes",
   "index_section",
   "status",
@@ -67,6 +69,23 @@
    "fieldname": "applied_to",
    "fieldtype": "Small Text",
    "label": "Applied To"
+  },
+  {
+   "fieldname": "audience_class",
+   "fieldtype": "Select",
+   "label": "Audience Class",
+   "options": "Public\nCommunity Health Worker\nProfessional\nRestricted",
+   "default": "Community Health Worker",
+   "in_list_view": 1,
+   "description": "Who may read this. Public = community members (WhatsApp); only Public documents are ever served to them. Staff read documents up to their own class."
+  },
+  {
+   "fieldname": "sensitivity",
+   "fieldtype": "Select",
+   "label": "Sensitivity",
+   "options": "Standard\nSensitive",
+   "default": "Standard",
+   "description": "Sensitive documents are served only to users with View Sensitive Knowledge Base content. Public documents cannot be Sensitive."
   },
   {
    "fieldname": "size_bytes",
@@ -157,7 +176,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-03 10:00:00.000000",
+ "modified": "2026-11-03 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "Knowledge Document",

@@ -172,6 +172,18 @@ def _pct(n, d):
 	return round(100.0 * n / d, 1) if d else None
 
 
+def _served_class(row):
+	"""Audience class of the matched passage as recorded at serve time (None for older rows)."""
+	try:
+		passages = json.loads(row.passages) if isinstance(row.passages, str) else (row.passages or [])
+	except Exception:
+		return None
+	for p in passages or []:
+		if isinstance(p, dict) and p.get("doc") == row.matched_document and p.get("audience_class"):
+			return p["audience_class"]
+	return None
+
+
 @frappe.whitelist()
 def get_metrics(from_date=None, to_date=None, channel=None):
 	"""Acceptance metrics (SRS Table 18 / Table 25) over Conversation records.
@@ -186,7 +198,7 @@ def get_metrics(from_date=None, to_date=None, channel=None):
 	to_date = to_date or today()
 	rows = frappe.get_all(DOCTYPE, filters=_filters(from_date, to_date, channel, "Conversation"),
 		fields=["outcome", "escalated_to_human", "latency_ms", "channel", "access_decision", "actor_class",
-			"matched_document", "feedback_helpful", "answer_mode"])
+			"matched_document", "feedback_helpful", "answer_mode", "passages"])
 	guidance = [r for r in rows if r.outcome not in NOT_GUIDANCE and r.access_decision != "DENY"]
 	matched = [r for r in guidance if r.outcome in MATCHED]
 	escalated = [r for r in guidance if cint(r.escalated_to_human) or r.outcome in ("No Match", "Escalated", "Conflict")]
@@ -195,10 +207,14 @@ def get_metrics(from_date=None, to_date=None, channel=None):
 	public_docs = None
 	for r in guidance:
 		if r.actor_class == "Public" and r.matched_document:
-			if public_docs is None:
-				public_docs = set(frappe.get_all("Knowledge Document", filters={"audience_class": "Public"}, pluck="name")) \
-					if frappe.get_meta("Knowledge Document").has_field("audience_class") else set()
-			if r.matched_document not in public_docs:
+			# the class recorded when the passage was served wins; the document may since be edited or deleted
+			served = _served_class(r)
+			if served is None:
+				if public_docs is None:
+					public_docs = set(frappe.get_all("Knowledge Document", filters={"audience_class": "Public"},
+						pluck="name")) if frappe.get_meta("Knowledge Document").has_field("audience_class") else set()
+				served = "Public" if r.matched_document in public_docs else "unknown"
+			if served != "Public":
 				leaks += 1
 	by_channel = {}
 	for r in rows:
