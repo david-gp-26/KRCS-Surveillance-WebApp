@@ -16,6 +16,7 @@
   "language",
   "regions",
   "review_date",
+  "effective_from",
   "expiry_date",
   "col1",
   "category",
@@ -144,13 +145,19 @@
    "label": "Review Date"
   },
   {
+   "fieldname": "effective_from",
+   "fieldtype": "Date",
+   "label": "Effective From",
+   "description": "Not served before this date (blank = from approval)"
+  },
+  {
    "fieldname": "expiry_date",
    "fieldtype": "Date",
    "label": "Expiry Date"
   }
  ],
  "links": [],
- "modified": "2026-10-13 09:52:40.317020",
+ "modified": "2026-11-03 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "Knowledge Document",

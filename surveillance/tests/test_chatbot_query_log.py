@@ -57,7 +57,7 @@ class TestChatbotQueryLog(FrappeTestCase):
 		with self.assertRaises(frappe.PermissionError):
 			kb.search("cholera", audience="Surveillance Officer", correlation_id="cid-proxy-1")
 		frappe.set_user("Administrator")
-		self.assertEqual(h.logs(correlation_id="cid-proxy-1")[0].deny_reason_code, "PROXY_NOT_ALLOWED")
+		self.assertEqual(h.logs(correlation_id="cid-proxy-1")[0].deny_reason_code, "PREVIEW_NOT_ALLOWED")
 
 	def test_allowed_search_logs_passages_and_config(self):
 		with h.kb_sandbox():

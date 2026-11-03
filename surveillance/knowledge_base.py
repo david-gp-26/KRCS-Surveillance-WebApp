@@ -43,7 +43,9 @@ import frappe
 from frappe import _
 from frappe.utils import cint, getdate, now_datetime, today
 
+from surveillance import kb_access
 from surveillance.capabilities import has_capability, require_capability
+from surveillance.kb_access import KBAccessDenied  # noqa: F401  (re-exported for callers and tests)
 
 DOCTYPE = "Knowledge Document"
 CAPABILITY = "manage_knowledge_base"
@@ -72,6 +74,8 @@ NOT_FOUND = {
 	"Kiswahili": "Sikupata jibu la swali hili katika nyaraka zilizoidhinishwa za KRCS. Tafadhali wasiliana na msimamizi wako au mwongozo husika.",
 }
 INDEXED_FIELDS = ("doc", "category", "approval_status", "applied_to", "diseases", "regions", "language")
+INTEGER_FIELDS = ("valid_from", "valid_to")   # effective dates as YYYYMMDD, filtered inside Qdrant (R62)
+OPEN_START, OPEN_END = 0, 99991231
 
 _model = None
 _sparse_model = None
@@ -83,15 +87,7 @@ class KBUnavailable(frappe.ValidationError):
 	http_status_code = 503
 
 
-class KBAccessDenied(frappe.PermissionError):
-	"""A protected Knowledge Base action was refused. `code` is the deny reason logged in the Chatbot Query Log."""
-
-	def __init__(self, message, code="DENIED"):
-		super().__init__(message)
-		self.code = code
-
-
-ACCESS_POLICY_VERSION = "kb-access-1"
+ACCESS_POLICY_VERSION = kb_access.POLICY_VERSION
 
 
 def retrieval_config():
@@ -184,6 +180,11 @@ def _ensure_collection(client, size):
 			client.create_payload_index(name, field_name=field, field_schema=PayloadSchemaType.KEYWORD)
 		except Exception:
 			pass
+	for field in INTEGER_FIELDS:
+		try:
+			client.create_payload_index(name, field_name=field, field_schema=PayloadSchemaType.INTEGER)
+		except Exception:
+			pass
 	return name
 
 
@@ -217,9 +218,28 @@ def _clean_diseases(value):
 	return ", ".join(keys)
 
 
+def _day(value):
+	return int(str(getdate(value)).replace("-", "")) if value else None
+
+
+def hide_after_review():
+	"""D6: a document past its review date stops being served (default on, as the chatbot service assumes)."""
+	return cint(frappe.conf.get("kb_hide_after_review_date", 1)) == 1
+
+
+def valid_window(doc):
+	"""(valid_from, valid_to) as YYYYMMDD. Content is served only when valid_from <= today <= valid_to."""
+	ends = [d for d in (doc.get("expiry_date"), doc.get("review_date") if hide_after_review() else None) if d]
+	return (_day(doc.get("effective_from")) or OPEN_START, min(_day(d) for d in ends) if ends else OPEN_END)
+
+
 def _access_payload(doc):
 	"""Fields used for filtering and citation; updated on every chunk without re-indexing."""
+	valid_from, valid_to = valid_window(doc)
 	return {
+		"valid_from": valid_from,
+		"valid_to": valid_to,
+		"effective_from": str(doc.effective_from) if doc.get("effective_from") else None,
 		"approval_status": doc.get("approval_status") or "Draft",
 		"applied_to": _split(doc.applied_to) or [ALL_ROLES],
 		"diseases": _split(doc.get("diseases")),
@@ -246,6 +266,10 @@ def _check_dates(doc):
 		frappe.throw(_("Language must be one of: {0}").format(", ".join(LANGUAGES)))
 	if doc.get("review_date") and doc.get("expiry_date") and getdate(doc.review_date) > getdate(doc.expiry_date):
 		frappe.throw(_("Review date must be on or before the expiry date."))
+	for end in ("review_date", "expiry_date"):
+		if doc.get("effective_from") and doc.get(end) and getdate(doc.effective_from) > getdate(doc.get(end)):
+			frappe.throw(_("The effective-from date must be on or before the {0}.").format(
+				_("review date") if end == "review_date" else _("expiry date")))
 
 
 def _sync_access(doc):
@@ -406,6 +430,7 @@ def _row(d):
 		"language": d.get("language") or "English",
 		"reviewDate": str(d.review_date) if d.get("review_date") else None,
 		"expiryDate": str(d.expiry_date) if d.get("expiry_date") else None,
+		"effectiveFrom": str(d.effective_from) if d.get("effective_from") else None,
 		"approvalStatus": (d.get("approval_status") or "Draft").lower(),
 		"approvedBy": frappe.utils.get_fullname(d.approved_by) if d.get("approved_by") else None,
 		"approvedAt": str(d.approved_on) if d.get("approved_on") else None,
@@ -423,7 +448,7 @@ def list_documents():
 
 @frappe.whitelist(methods=["POST"])
 def create_document(file_url, category, applied_to=None, version="v1.0", diseases=None,
-		regions=None, language="English", review_date=None, expiry_date=None):
+		regions=None, language="English", review_date=None, expiry_date=None, effective_from=None):
 	"""Register an already uploaded file (via /api/method/upload_file) and queue indexing. Starts as Draft."""
 	require_capability(CAPABILITY)
 	f = frappe.get_doc("File", {"file_url": file_url})
@@ -438,6 +463,7 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		"diseases": _clean_diseases(diseases), "approval_status": "Draft",
 		"regions": _clean_regions(regions), "language": language or "English",
 		"review_date": review_date or None, "expiry_date": expiry_date or None,
+		"effective_from": effective_from or None,
 		"size_bytes": cint(f.file_size), "status": "Processing",
 	})
 	_check_dates(doc)
@@ -449,7 +475,7 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 
 @frappe.whitelist(methods=["POST"])
 def update_document(name, category=None, applied_to=None, diseases=None, version=None,
-		regions=None, language=None, review_date=None, expiry_date=None):
+		regions=None, language=None, review_date=None, expiry_date=None, effective_from=None):
 	"""Edit document details. Everything is copied to Qdrant without re-embedding."""
 	require_capability(CAPABILITY)
 	doc = frappe.get_doc(DOCTYPE, name)
@@ -469,6 +495,8 @@ def update_document(name, category=None, applied_to=None, diseases=None, version
 		doc.review_date = review_date or None
 	if expiry_date is not None:
 		doc.expiry_date = expiry_date or None
+	if effective_from is not None:
+		doc.effective_from = effective_from or None
 	_check_dates(doc)
 	doc.save(ignore_permissions=True)
 	_sync_access(doc)
@@ -553,46 +581,10 @@ def _confidence(score, t):
 	return "high" if score >= t["high"] else ("medium" if score >= t["low"] else "low")
 
 
-def _assigned_region(user):
-	if frappe.get_meta("User").has_field("assigned_region"):
-		return frappe.db.get_value("User", user, "assigned_region")
-	return None
-
-
-def _access_context(audience=None, region=None, include_drafts=0):
-	"""Who is asking and what they may see. Raises 403/417 on bad requests."""
-	is_editor = has_capability(CAPABILITY)
-	if not is_editor and not has_capability(SEARCH_CAPABILITY):
-		raise KBAccessDenied(_("You do not have permission to perform this action."), "NO_CAPABILITY")
-	can_proxy = is_editor or has_capability(SERVICE_CAPABILITY)
-	if (audience or region) and not can_proxy:
-		raise KBAccessDenied(_("You cannot search on behalf of another role or region."), "PROXY_NOT_ALLOWED")
-
-	if audience:
-		roles = _split(audience)
-		valid = set(frappe.get_all("Surveillance Role", pluck="name"))
-		unknown = [r for r in roles if r not in valid and r != ALL_ROLES]
-		if unknown:
-			frappe.throw(_("Unknown audience role(s): {0}").format(", ".join(unknown)))
-	elif is_editor:
-		roles = None  # editors see every audience
-	else:
-		role = frappe.db.get_value("User", frappe.session.user, "primary_role")
-		roles = [role] if role else []
-
-	if region:
-		regions = [r for r in _split(region) if r != ALL_REGIONS]
-		valid = set(frappe.get_all("Region", pluck="name"))
-		unknown = [r for r in regions if r not in valid]
-		if unknown:
-			frappe.throw(_("Unknown region(s): {0}").format(", ".join(unknown)))
-	elif is_editor:
-		regions = None
-	else:
-		r = _assigned_region(frappe.session.user)
-		regions = [r] if r else None  # no assigned region = national user, sees every region
-
-	return {"approved_only": not (is_editor and cint(include_drafts)), "roles": roles, "regions": regions}
+def _access_context(audience=None, region=None, include_drafts=0, on_behalf_of=None, preview=0):
+	"""Who is asking and what they may see (surveillance.kb_access). Raises 403/417 on bad requests."""
+	return kb_access.resolve(on_behalf_of=on_behalf_of, audience=audience, region=region,
+		include_drafts=include_drafts, preview=preview)
 
 
 class _Audit:
@@ -614,6 +606,8 @@ class _Audit:
 
 	def context(self, ctx):
 		self.fields.update({
+			"user": ctx.get("user"), "user_ref": ctx.get("user_ref"), "actor_class": ctx.get("actor_class"),
+			"access_policy_version": ctx.get("policy_version") or ACCESS_POLICY_VERSION,
 			"access_decision": "ALLOW",
 			"audience_roles": "ALL (editor)" if ctx["roles"] is None else ", ".join(ctx["roles"]) or "-",
 			"scope": "ALL" if ctx["regions"] is None else ", ".join(ctx["regions"]),
@@ -622,6 +616,12 @@ class _Audit:
 
 	def _ms(self):
 		return int((time.monotonic() - self.started) * 1000)
+
+	def claimed(self, on_behalf_of):
+		"""Before the decision: record who the caller said the asker was."""
+		if on_behalf_of:
+			self.fields["user_ref"] = str(on_behalf_of)[:140]
+			self.fields["user"] = on_behalf_of if frappe.db.exists("User", on_behalf_of) else None
 
 	def denied(self, exc):
 		code = getattr(exc, "code", None) or ("INVALID_REQUEST" if isinstance(exc, frappe.ValidationError) else "DENIED")
@@ -650,9 +650,14 @@ def _passage_trace(scored):
 
 def _filter(ctx, category=None, disease=None):
 	from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
+	from qdrant_client.models import Range
 	must = []
 	if ctx["approved_only"]:
 		must.append(FieldCondition(key="approval_status", match=MatchValue(value="Approved")))
+		# effective dates before retrieval: out-of-date content never reaches scoring (R62)
+		now = _day(today())
+		must.append(FieldCondition(key="valid_from", range=Range(lte=now)))
+		must.append(FieldCondition(key="valid_to", range=Range(gte=now)))
 	if ctx["roles"] is not None:
 		must.append(FieldCondition(key="applied_to", match=MatchAny(any=[ALL_ROLES] + ctx["roles"])))
 	if ctx["regions"] is not None:
@@ -668,6 +673,8 @@ def _visible(payload, ctx):
 	"""Same rules as _filter, for a single passage fetched by id."""
 	if ctx["approved_only"] and payload.get("approval_status") != "Approved":
 		return False
+	if ctx["approved_only"] and _expired(payload):
+		return False
 	if ctx["roles"] is not None and not ({ALL_ROLES, *ctx["roles"]} & set(payload.get("applied_to") or [ALL_ROLES])):
 		return False
 	if ctx["regions"] is not None and not ({ALL_REGIONS, *ctx["regions"]} & set(payload.get("regions") or [ALL_REGIONS])):
@@ -676,6 +683,10 @@ def _visible(payload, ctx):
 
 
 def _expired(payload):
+	"""Second check after retrieval (the Qdrant filter already excludes these)."""
+	now = _day(today())
+	if payload.get("valid_to") is not None or payload.get("valid_from") is not None:
+		return not (cint(payload.get("valid_from")) <= now <= cint(payload.get("valid_to") or OPEN_END))
 	return bool(payload.get("expiry_date")) and payload["expiry_date"] < today()
 
 
@@ -791,13 +802,14 @@ def _dense_scores(query, points):
 
 @frappe.whitelist()
 def search(query, limit=5, category=None, disease=None, audience=None, region=None, language=None, include_drafts=0,
-		correlation_id=None, channel=None):
+		correlation_id=None, channel=None, on_behalf_of=None, preview=0):
 	"""Best passages for a question (hybrid search + re-rank), returned verbatim. Used by the chatbot.
 	Every call, allowed or denied, is written to the Chatbot Query Log (level Retrieval)."""
 	started = time.monotonic()
 	audit = _Audit("kb_search", "Retrieval", query, language, correlation_id, channel or "API")
+	audit.claimed(on_behalf_of)
 	try:
-		ctx = _access_context(audience, region, include_drafts)
+		ctx = _access_context(audience, region, include_drafts, on_behalf_of, preview)
 		query = (query or "").strip()
 		if not query:
 			frappe.throw(_("Query is empty."))
@@ -917,7 +929,7 @@ def _history_messages(history):
 
 @frappe.whitelist(methods=["POST"])
 def ask(query, language=None, history=None, stream_id=None, category=None, disease=None,
-		audience=None, region=None, include_drafts=0, correlation_id=None, channel=None):
+		audience=None, region=None, include_drafts=0, correlation_id=None, channel=None, on_behalf_of=None, preview=0):
 	"""One grounded answer to a question, with the sources it used.
 
 	stream_id: when given, tokens are pushed live to this user over realtime event "kb_answer"
@@ -927,8 +939,9 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	"""
 	started = time.monotonic()
 	audit = _Audit("kb_ask", "Conversation", query, language, correlation_id, channel or "Web")
+	audit.claimed(on_behalf_of)
 	try:
-		ctx = _access_context(audience, region, include_drafts)
+		ctx = _access_context(audience, region, include_drafts, on_behalf_of, preview)
 		query = (query or "").strip()
 		if not query:
 			frappe.throw(_("Query is empty."))
@@ -1028,11 +1041,12 @@ def llm_status():
 
 
 @frappe.whitelist()
-def get_passage(id, audience=None, region=None, correlation_id=None, channel=None):
+def get_passage(id, audience=None, region=None, correlation_id=None, channel=None, on_behalf_of=None):
 	"""Fetch one passage by the id returned from search, with the same access rules. Logged (level Retrieval)."""
 	audit = _Audit("kb_passage", "Retrieval", f"passage:{id}", None, correlation_id, channel or "API")
+	audit.claimed(on_behalf_of)
 	try:
-		ctx = _access_context(audience, region)
+		ctx = _access_context(audience, region, on_behalf_of=on_behalf_of)
 	except (frappe.PermissionError, frappe.ValidationError) as e:
 		audit.denied(e)
 		raise
@@ -1063,13 +1077,60 @@ def get_disease_vocabulary():
 
 
 def retire_expired():
-	"""Daily: move Approved documents past their expiry date to Retired (search also hides them immediately)."""
-	names = frappe.get_all(DOCTYPE, filters={"approval_status": "Approved", "expiry_date": ["<", today()]}, pluck="name")
-	for name in names:
+	"""Daily: move Approved documents past their expiry date (or review date, when kb_hide_after_review_date) to
+	Retired. Search already hides them from the day after, through the valid_to filter."""
+	# "is set" matters: Frappe compiles `date < today` to ifnull(date, '0001-01-01') < today, so without it every
+	# document with no expiry / review date would be retired (the pre-November code had this bug for expiry_date).
+	ends = ["expiry_date"] + (["review_date"] if hide_after_review() else [])
+	names = set()
+	for field in ends:
+		names |= set(frappe.get_all(DOCTYPE, pluck="name", filters=[["approval_status", "=", "Approved"],
+			[field, "is", "set"], [field, "<", today()]]))
+	for name in sorted(names):
 		doc = frappe.get_doc(DOCTYPE, name)
+		why = "expiry date" if doc.expiry_date and getdate(doc.expiry_date) < getdate(today()) else "review date"
 		doc.approval_status = "Retired"
 		doc.save(ignore_permissions=True)
-		doc.add_comment("Comment", "Retired automatically: expiry date passed.")
+		doc.add_comment("Comment", f"Retired automatically: {why} passed.")
 		_sync_access(doc)
 	frappe.db.commit()
+	return len(names)
+
+
+REVIEW_NOTICE_DAYS = (30, 7)
+
+
+def notify_upcoming_reviews():
+	"""Daily: remind the uploader and approver 30 and 7 days before a document's review or expiry date (H.9)."""
+	from frappe.utils import add_days
+	sent = 0
+	for days in REVIEW_NOTICE_DAYS:
+		day = add_days(today(), days)
+		for field in ("review_date", "expiry_date"):
+			for d in frappe.get_all(DOCTYPE, filters={"approval_status": "Approved", field: day},
+					fields=["name", "title", "owner", "approved_by"]):
+				what = _("review") if field == "review_date" else _("expiry")
+				for u in {d.owner, d.approved_by} - {None, "Administrator"}:
+					frappe.get_doc({"doctype": "Notification Log", "for_user": u, "type": "Alert",
+						"document_type": DOCTYPE, "document_name": d.name,
+						"subject": _("Knowledge document {0}: {1} due in {2} days").format(d.title, what, days),
+					}).insert(ignore_permissions=True)
+					sent += 1
+	frappe.db.commit()
+	return sent
+
+
+def sync_all_payloads():
+	"""Copy current access fields (incl. effective dates) onto every chunk. Patch after upgrade; also safe any time.
+	bench --site <site> execute surveillance.knowledge_base.sync_all_payloads"""
+	names = frappe.get_all(DOCTYPE, pluck="name")
+	try:
+		client = _qdrant()
+		if client.collection_exists(_collection()):
+			_ensure_collection(client, 0)
+	except Exception:
+		frappe.log_error(title="Knowledge Base: payload sync could not reach Qdrant")
+		return 0
+	for name in names:
+		_sync_access(frappe.get_doc(DOCTYPE, name))
 	return len(names)

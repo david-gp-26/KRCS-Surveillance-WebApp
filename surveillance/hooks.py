@@ -210,7 +210,7 @@ doc_events = {
 
 
 scheduler_events = {
-	"daily": ["surveillance.knowledge_base.retire_expired", "surveillance.chatbot_log.purge_old_logs", "surveillance.context.import_weather",
+	"daily": ["surveillance.knowledge_base.retire_expired", "surveillance.knowledge_base.notify_upcoming_reviews", "surveillance.chatbot_log.purge_old_logs", "surveillance.context.import_weather",
 		"surveillance.event_tasks.daily_reminders"],
 	"hourly_long": ["surveillance.cbs_feed.hourly", "surveillance.risk.refresh_open", "surveillance.push.check_receipts"],
 	"daily_long": ["surveillance.cbs_feed.daily"],

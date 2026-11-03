@@ -268,17 +268,24 @@ function RowMenu({ items }) {
   )
 }
 
+function optionsDateError({ effectiveFrom, reviewDate, expiryDate }) {
+  if (reviewDate && expiryDate && reviewDate > expiryDate) return 'Review date must not be after the expiry date.'
+  if (effectiveFrom && expiryDate && effectiveFrom > expiryDate) return 'Effective date must not be after the expiry date.'
+  return ''
+}
+
 // More options (diseases, language, regions, dates) shared by upload and edit
 function MoreOptions({ values, setValues, diseaseOptions, regionOptions, diseaseNames }) {
   const [open, setOpen] = useState(false)
-  const { diseases, language, regions, reviewDate, expiryDate } = values
-  const dateError = reviewDate && expiryDate && reviewDate > expiryDate ? 'Review date must not be after the expiry date.' : ''
+  const { diseases, language, regions, reviewDate, expiryDate, effectiveFrom } = values
+  const dateError = optionsDateError(values)
   const summary = [
     language || 'English',
     regions.includes(ALL_REGIONS) ? 'All regions' : regions.join(', '),
     diseases.length ? diseases.map((k) => diseaseNames[k] || k).join(', ') : 'No diseases',
+    effectiveFrom ? `From ${formatDate(effectiveFrom)}` : null,
     expiryDate ? `Expires ${formatDate(expiryDate)}` : 'No expiry',
-  ].join(' · ')
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="border border-gray-100 rounded-xl">
@@ -306,6 +313,10 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
             <MultiSelectDropdown label="Select regions" options={regionOptions} selected={regions} onChange={(next) => setValues({ regions: normalizeRegions(regions, next) })} />
           </div>
           <div>
+            <label className={LABEL}>Effective from</label>
+            <input type="date" value={effectiveFrom || ''} onChange={(e) => setValues({ effectiveFrom: e.target.value })} className={INPUT} />
+          </div>
+          <div>
             <label className={LABEL}>Review date</label>
             <input type="date" value={reviewDate} onChange={(e) => setValues({ reviewDate: e.target.value })} className={INPUT} />
           </div>
@@ -321,7 +332,7 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
   )
 }
 
-const EMPTY_OPTIONS = { diseases: [], language: 'English', regions: [ALL_REGIONS], reviewDate: '', expiryDate: '' }
+const EMPTY_OPTIONS = { diseases: [], language: 'English', regions: [ALL_REGIONS], effectiveFrom: '', reviewDate: '', expiryDate: '' }
 
 function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOptions, diseaseNames, onUploaded }) {
   const [files, setFiles] = useState([])
@@ -332,7 +343,7 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
   const [progress, setProgress] = useState(null)
   const [errors, setErrors] = useState([])
   const fileInputRef = useRef(null)
-  const dateError = opts.reviewDate && opts.expiryDate && opts.reviewDate > opts.expiryDate
+  const dateError = optionsDateError(opts)
 
   useEffect(() => {
     if (!open) return
@@ -373,6 +384,7 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
           diseases: opts.diseases,
           language: opts.language,
           regions: opts.regions,
+          effective_from: opts.effectiveFrom,
           review_date: opts.reviewDate,
           expiry_date: opts.expiryDate,
         })
@@ -503,9 +515,10 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     regions: doc.regions?.length ? doc.regions : [ALL_REGIONS],
     reviewDate: doc.reviewDate ? String(doc.reviewDate).slice(0, 10) : '',
     expiryDate: doc.expiryDate ? String(doc.expiryDate).slice(0, 10) : '',
+    effectiveFrom: doc.effectiveFrom ? String(doc.effectiveFrom).slice(0, 10) : '',
   })
   const [saving, setSaving] = useState(false)
-  const dateError = opts.reviewDate && opts.expiryDate && opts.reviewDate > opts.expiryDate
+  const dateError = !!optionsDateError(opts)
 
   async function submit() {
     if (dateError) return
@@ -513,6 +526,7 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     await onSave({
       category, version, applied_to: appliedTo.length ? appliedTo : [ALL_ROLES], diseases: opts.diseases,
       language: opts.language, regions: opts.regions, review_date: opts.reviewDate, expiry_date: opts.expiryDate,
+      effective_from: opts.effectiveFrom,
     })
     setSaving(false)
   }
@@ -635,6 +649,7 @@ const EMPTY_FILTERS = { category: '', role: '', language: '', region: '', indexi
 function TestSearch() {
   const [query, setQuery] = useState('')
   const [drafts, setDrafts] = useState(true)
+  const [preview, setPreview] = useState(true)
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -647,7 +662,7 @@ function TestSearch() {
     setError('')
     setExpanded({})
     try {
-      const res = await searchKnowledgeBase({ query: query.trim(), limit: 5, includeDrafts: drafts })
+      const res = await searchKnowledgeBase({ query: query.trim(), limit: 5, includeDrafts: drafts, preview })
       setResults(Array.isArray(res) ? res : res?.results || [])
     } catch (err) {
       setError(err.message || 'Search failed')
@@ -667,6 +682,10 @@ function TestSearch() {
         <label className="flex items-center gap-2 text-sm text-gray-700">
           <input type="checkbox" checked={drafts} onChange={(e) => setDrafts(e.target.checked)} className="accent-red-600" />
           Include drafts
+        </label>
+        <label className="flex items-center gap-2 text-sm text-gray-700" title="Off: search as yourself, seeing only what your own role and region allow">
+          <input type="checkbox" checked={preview || drafts} disabled={drafts} onChange={(e) => setPreview(e.target.checked)} className="accent-red-600" />
+          All audiences
         </label>
         <button type="submit" disabled={loading || !query.trim()} className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 disabled:bg-gray-200 text-white text-sm font-medium inline-flex items-center gap-2">
           {loading && <Loader2 className="w-4 h-4 animate-spin" />}{loading ? 'Searching…' : 'Search'}

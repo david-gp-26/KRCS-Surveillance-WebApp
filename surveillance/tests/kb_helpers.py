@@ -18,6 +18,7 @@ import frappe
 from surveillance import knowledge_base as kb
 
 DIM = 64
+_created = []
 _WORD = re.compile(r"\w+", re.U)
 
 
@@ -58,14 +59,21 @@ def kb_sandbox(**conf):
 	for k, v in conf.items():
 		frappe.conf[k] = v
 	try:
+		# patch the functions too: frappe.conf can be reloaded mid-test, and the live collection must never be touched
 		with patch.object(kb, "embed", fake_embed), patch.object(kb, "sparse_embed", fake_sparse), \
-				patch.object(kb, "_enqueue", lambda name: None):
+				patch.object(kb, "_enqueue", lambda name: None), patch.object(kb, "_collection", lambda: collection), \
+				patch.object(kb, "_rerank_model", lambda: None):
 			yield collection
 	finally:
 		try:
 			kb._qdrant().delete_collection(collection)
 		except Exception:
 			pass
+		# documents are committed by logging during tests; remove this sandbox's ones so runs don't pile up
+		for name in _created:
+			frappe.db.delete(kb.DOCTYPE, {"name": name})
+		_created.clear()
+		frappe.db.commit()
 		for k, v in saved.items():
 			if v is None:
 				frappe.conf.pop(k, None)
@@ -123,6 +131,7 @@ def add_document(title, text, approve=True, **meta):
 	f = frappe.get_doc({"doctype": "File", "file_name": fname, "content": text.encode(), "is_private": 1})
 	f.insert(ignore_permissions=True)
 	row = kb.create_document(f.file_url, meta.pop("category", "Guideline"), **meta)
+	_created.append(row["id"])
 	kb.index_document(row["id"])
 	doc = frappe.get_doc(kb.DOCTYPE, row["id"])
 	assert doc.status == "Indexed", doc.error
