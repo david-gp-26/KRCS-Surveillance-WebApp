@@ -877,11 +877,11 @@ async function kbRequest(method, params = {}, httpMethod = 'GET') {
 
 export const getKbDocuments = () => kbRequest('list_documents')
 
-export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with }) =>
-  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with }, 'POST')
+export const createKbDocument = ({ file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with, sub_counties }) =>
+  kbRequest('create_document', { file_url, category, applied_to, diseases, version, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, supersedes, authority, conflicts_with, sub_counties }, 'POST')
 
-export const updateKbDocument = (name, { category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with }) =>
-  kbRequest('update_document', { name, category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with }, 'POST')
+export const updateKbDocument = (name, { category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with, sub_counties }) =>
+  kbRequest('update_document', { name, category, version, applied_to, diseases, language, regions, review_date, expiry_date, effective_from, audience_class, sensitivity, authority, conflicts_with, sub_counties }, 'POST')
 
 export const setKbApproval = (name, status) => kbRequest('set_approval', { name, status }, 'POST')
 

@@ -61,7 +61,7 @@ SENSITIVITIES = ("Standard", "Sensitive")
 VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}$")   # v1, v1.2, v1.2.3
 # changing any of these on an Approved document can widen who sees it: it goes back to Draft (R60, R62)
 GOVERNED_FIELDS = ("category", "version", "applied_to", "diseases", "regions", "language", "audience_class",
-	"sensitivity", "authority", "conflicts_with")
+	"sensitivity", "authority", "conflicts_with", "sub_counties")
 LANGUAGE_BOOST = 0.05   # added to the score of passages in the asker's language when ranking
 MAX_LIMIT = 20
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "md"}
@@ -79,7 +79,7 @@ NOT_FOUND = {
 	"English": "I couldn't find this in the approved KRCS documents. Please check with your supervisor or the relevant guideline.",
 	"Kiswahili": "Sikupata jibu la swali hili katika nyaraka zilizoidhinishwa za KRCS. Tafadhali wasiliana na msimamizi wako au mwongozo husika.",
 }
-INDEXED_FIELDS = ("doc", "category", "approval_status", "applied_to", "diseases", "regions", "language")
+INDEXED_FIELDS = ("doc", "category", "approval_status", "applied_to", "diseases", "regions", "language", "scope_tokens")
 INTEGER_FIELDS = ("valid_from", "valid_to", "audience_level", "authority_rank")   # effective dates as YYYYMMDD, filtered inside Qdrant (R62)
 OPEN_START, OPEN_END = 0, 99991231
 
@@ -267,6 +267,8 @@ def _access_payload(doc):
 		"applied_to": _split(doc.applied_to) or [ALL_ROLES],
 		"diseases": _split(doc.get("diseases")),
 		"regions": _split(doc.get("regions")) or [ALL_REGIONS],
+		"sub_counties": _split(doc.get("sub_counties")),
+		"scope_tokens": scope_tokens(doc),
 		"language": doc.get("language") or "English",
 		"review_date": str(doc.review_date) if doc.get("review_date") else None,
 		"expiry_date": str(doc.expiry_date) if doc.get("expiry_date") else None,
@@ -278,6 +280,30 @@ def _access_payload(doc):
 		"conflicts_with": _split(doc.get("conflicts_with")),
 		"document_family": _family(doc),
 	}
+
+
+def scope_tokens(doc):
+	"""Where a document applies (KB-4): sub-counties if given, else its regions, else national."""
+	subs = _split(doc.get("sub_counties"))
+	if subs:
+		return [f"subcounty:{s}" for s in subs]
+	regions = [r for r in _split(doc.get("regions")) if r != ALL_REGIONS]
+	return [f"region:{r}" for r in regions] or [kb_access.NATIONAL]
+
+
+def _clean_sub_counties(value, regions):
+	subs = _split(value)
+	if not subs:
+		return None
+	rows = {s.name: s for s in frappe.get_all("Sub County", filters={"name": ["in", subs]}, fields=["name", "region"])}
+	unknown = [s for s in subs if s not in rows]
+	if unknown:
+		frappe.throw(_("Unknown sub-county(s): {0}").format(", ".join(unknown)))
+	allowed = [r for r in _split(regions) if r != ALL_REGIONS]
+	outside = [s for s in subs if allowed and rows[s].region not in allowed]
+	if outside:
+		frappe.throw(_("Sub-county(s) outside the selected regions: {0}").format(", ".join(outside)))
+	return ", ".join(subs)
 
 
 def _clean_regions(value):
@@ -511,6 +537,7 @@ def _row(d):
 		"category": d.category, "appliedTo": _split(d.applied_to),
 		"diseases": _split(d.get("diseases")),
 		"regions": _split(d.get("regions")) or [ALL_REGIONS],
+		"subCounties": _split(d.get("sub_counties")),
 		"language": d.get("language") or "English",
 		"reviewDate": str(d.review_date) if d.get("review_date") else None,
 		"expiryDate": str(d.expiry_date) if d.get("expiry_date") else None,
@@ -541,7 +568,7 @@ def list_documents():
 @frappe.whitelist(methods=["POST"])
 def create_document(file_url, category, applied_to=None, version="v1.0", diseases=None,
 		regions=None, language="English", review_date=None, expiry_date=None, effective_from=None,
-		audience_class=None, sensitivity=None, supersedes=None, authority=None, conflicts_with=None):
+		audience_class=None, sensitivity=None, supersedes=None, authority=None, conflicts_with=None, sub_counties=None):
 	"""Register an already uploaded file (via /api/method/upload_file) and queue indexing. Starts as Draft."""
 	require_capability(CAPABILITY)
 	f = frappe.get_doc("File", {"file_url": file_url})
@@ -565,6 +592,7 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 		"version": version, "category": category, "supersedes": supersedes or None, "document_family": family, "applied_to": ", ".join(_split(applied_to)) or ALL_ROLES,
 		"diseases": _clean_diseases(diseases), "approval_status": "Draft",
 		"regions": _clean_regions(regions), "language": language or "English",
+		"sub_counties": _clean_sub_counties(sub_counties, regions),
 		"review_date": review_date or None, "expiry_date": expiry_date or None,
 		"effective_from": effective_from or None,
 		"audience_class": audience_class or kb_access.DEFAULT_AUDIENCE_CLASS,
@@ -586,7 +614,7 @@ def create_document(file_url, category, applied_to=None, version="v1.0", disease
 @frappe.whitelist(methods=["POST"])
 def update_document(name, category=None, applied_to=None, diseases=None, version=None,
 		regions=None, language=None, review_date=None, expiry_date=None, effective_from=None,
-		audience_class=None, sensitivity=None, authority=None, conflicts_with=None):
+		audience_class=None, sensitivity=None, authority=None, conflicts_with=None, sub_counties=None):
 	"""Edit document details. Everything is copied to Qdrant without re-embedding."""
 	require_capability(CAPABILITY)
 	doc = frappe.get_doc(DOCTYPE, name)
@@ -619,6 +647,9 @@ def update_document(name, category=None, applied_to=None, diseases=None, version
 		doc.authority = authority or kb_grounding.DEFAULT_AUTHORITY
 	if conflicts_with is not None:
 		doc.conflicts_with = ", ".join(_split(conflicts_with)) or None
+	if sub_counties is not None or regions is not None:
+		doc.sub_counties = _clean_sub_counties(doc.get("sub_counties") if sub_counties is None else sub_counties,
+			doc.regions)
 	_check_dates(doc)
 	changed = [f for f in GOVERNED_FIELDS if _norm(before[f]) != _norm(doc.get(f))]
 	if changed and doc.approval_status == "Approved":
@@ -775,7 +806,8 @@ class _Audit:
 			"access_policy_version": ctx.get("policy_version") or ACCESS_POLICY_VERSION,
 			"access_decision": "ALLOW",
 			"audience_roles": "PUBLIC" if ctx.get("public_only") else ("ALL (editor)" if ctx["roles"] is None else ", ".join(ctx["roles"]) or "-"),
-			"scope": "ALL" if ctx["regions"] is None else ", ".join(ctx["regions"]),
+			"scope": "ALL" if ctx.get("scopes", ctx["regions"]) is None else ", ".join(
+				x for x in (ctx.get("scopes") or ctx["regions"] or []) if not x.startswith("facility:"))[:140],
 			"preview": 1 if ctx.get("preview") else 0,
 		})
 
@@ -835,7 +867,9 @@ def _filter(ctx, category=None, disease=None):
 			must_not.append(FieldCondition(key="audience_level", range=Range(gt=ctx["max_level"])))
 	if not ctx.get("sensitive", True):
 		must_not.append(FieldCondition(key="sensitive", match=MatchValue(value=True)))
-	if ctx["regions"] is not None:
+	if ctx.get("scopes") is not None:
+		must.append(FieldCondition(key="scope_tokens", match=MatchAny(any=ctx["scopes"])))
+	elif "scopes" not in ctx and ctx["regions"] is not None:
 		must.append(FieldCondition(key="regions", match=MatchAny(any=[ALL_REGIONS] + ctx["regions"])))
 	if category:
 		must.append(FieldCondition(key="category", match=MatchValue(value=category)))
@@ -861,7 +895,11 @@ def _visible(payload, ctx):
 			return False
 	if not ctx.get("sensitive", True) and payload.get("sensitive"):
 		return False
-	if ctx["regions"] is not None and not ({ALL_REGIONS, *ctx["regions"]} & set(payload.get("regions") or [ALL_REGIONS])):
+	if ctx.get("scopes") is not None:
+		if not set(ctx["scopes"]) & set(payload.get("scope_tokens") or []):
+			return False
+	elif "scopes" not in ctx and ctx["regions"] is not None and not (
+			{ALL_REGIONS, *ctx["regions"]} & set(payload.get("regions") or [ALL_REGIONS])):
 		return False
 	return not _expired(payload)
 

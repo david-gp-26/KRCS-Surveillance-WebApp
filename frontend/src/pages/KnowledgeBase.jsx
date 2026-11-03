@@ -24,7 +24,7 @@ import AppShell from '../components/layout/AppShell'
 import { KB_CATEGORIES, KB_WORKSPACE_LIMIT_BYTES } from '../data/mockKnowledgeBase'
 import {
   uploadFile, getKbDocuments, createKbDocument, reindexKbDocument, deleteKbDocument, updateKbDocument,
-  setKbApproval, getRoles, getDiseaseOptions, getRegions, searchKnowledgeBase, getKbHealth, runKbReconcile,
+  setKbApproval, getRoles, getDiseaseOptions, getRegions, searchKnowledgeBase, getKbHealth, runKbReconcile, getSubCounties,
 } from '../api/frappe'
 import { useCapabilities } from '../context/CapabilitiesContext'
 
@@ -297,6 +297,19 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
   const [open, setOpen] = useState(false)
   const { diseases, language, regions, reviewDate, expiryDate, effectiveFrom } = values
   const audienceClass = values.audienceClass || DEFAULT_AUDIENCE_CLASS
+  const subCounties = values.subCounties || []
+  const [subCountyList, setSubCountyList] = useState([])
+  const [regionRows, setRegionRows] = useState([])
+  useEffect(() => {
+    if (!open) return
+    getSubCounties('').then(setSubCountyList).catch(() => {})
+    getRegions().then(setRegionRows).catch(() => {})
+  }, [open])
+  // sub-counties belong to the region record; the form names regions by display name
+  const regionIds = new Set(regionRows.filter((r) => regions.includes(r.region_name || r.name) || regions.includes(r.name)).map((r) => r.name))
+  const subCountyOptions = regions.includes(ALL_REGIONS) ? [] : subCountyList
+    .filter((s) => regionIds.has(s.region))
+    .map((s) => ({ value: s.name, label: `${s.sub_county_name}${s.county ? ` (${s.county})` : ''}` }))
   const sensitivity = values.sensitivity || 'Standard'
   const dateError = optionsDateError(values)
   const summary = [
@@ -359,8 +372,15 @@ function MoreOptions({ values, setValues, diseaseOptions, regionOptions, disease
           </div>
           <div>
             <label className={LABEL}>Regions</label>
-            <MultiSelectDropdown label="Select regions" options={regionOptions} selected={regions} onChange={(next) => setValues({ regions: normalizeRegions(regions, next) })} />
+            <MultiSelectDropdown label="Select regions" options={regionOptions} selected={regions} onChange={(next) => setValues({ regions: normalizeRegions(regions, next), subCounties: [] })} />
           </div>
+          {subCountyOptions.length > 0 && (
+            <div className="sm:col-span-2">
+              <label className={LABEL}>Sub-counties / camps <span className="font-normal text-gray-400">(optional)</span></label>
+              <MultiSelectDropdown label="Whole region" options={subCountyOptions} selected={subCounties} onChange={(v) => setValues({ subCounties: v })} />
+              <p className="text-xs text-gray-400 mt-1">Narrow the document to these sub-counties. Regional staff still see it; staff in other sub-counties do not.</p>
+            </div>
+          )}
           <div>
             <label className={LABEL}>Effective from</label>
             <input type="date" value={effectiveFrom || ''} onChange={(e) => setValues({ effectiveFrom: e.target.value })} className={INPUT} />
@@ -459,6 +479,7 @@ function UploadDrawer({ open, onClose, roleOptions, diseaseOptions, regionOption
           supersedes: supersedes?.id,
           authority: opts.authority,
           conflicts_with: opts.conflictsWith,
+          sub_counties: opts.subCounties,
           review_date: opts.reviewDate,
           expiry_date: opts.expiryDate,
         })
@@ -603,6 +624,7 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
     sensitivity: doc.sensitivity || 'Standard',
     authority: doc.authority || 'KRCS protocol',
     conflictsWith: (doc.conflictsWith || []).join(', '),
+    subCounties: doc.subCounties || [],
   })
   const [saving, setSaving] = useState(false)
   const dateError = !!optionsDateError(opts)
@@ -614,7 +636,7 @@ function EditDocumentModal({ doc, roleOptions, diseaseOptions, regionOptions, di
       category, version, applied_to: appliedTo.length ? appliedTo : [ALL_ROLES], diseases: opts.diseases,
       language: opts.language, regions: opts.regions, review_date: opts.reviewDate, expiry_date: opts.expiryDate,
       effective_from: opts.effectiveFrom, audience_class: opts.audienceClass, sensitivity: opts.sensitivity,
-      authority: opts.authority, conflicts_with: opts.conflictsWith,
+      authority: opts.authority, conflicts_with: opts.conflictsWith, sub_counties: opts.subCounties,
     })
     setSaving(false)
   }

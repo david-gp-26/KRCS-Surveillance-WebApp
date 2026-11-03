@@ -18,6 +18,7 @@
   "diseases",
   "language",
   "regions",
+  "sub_counties",
   "review_date",
   "effective_from",
   "expiry_date",
@@ -203,6 +204,12 @@
    "label": "Regions"
   },
   {
+   "fieldname": "sub_counties",
+   "fieldtype": "Small Text",
+   "label": "Sub-counties / camps",
+   "description": "Optional: narrow the document to these sub-counties (comma-separated Sub County IDs) within its regions. Users in a region also see its sub-county documents; users in a sub-county also see regional and national ones."
+  },
+  {
    "fieldname": "review_date",
    "fieldtype": "Date",
    "label": "Review Date"
@@ -244,7 +251,7 @@
   }
  ],
  "links": [],
- "modified": "2026-11-03 16:00:00.000000",
+ "modified": "2026-11-03 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "Knowledge Document",

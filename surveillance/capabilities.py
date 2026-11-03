@@ -123,6 +123,8 @@ CAPABILITIES = [
 	 "description": "Read Knowledge Base documents marked Sensitive", "grants": {}},
 	{"key": "view_restricted_kb", "name": "View Restricted Knowledge Base Content", "category": "Knowledge Base",
 	 "description": "Read Knowledge Base documents with audience class Restricted", "grants": {}},
+	{"key": "kb_national_scope", "name": "Knowledge Base National Scope", "category": "Knowledge Base",
+	 "description": "Read Knowledge Base documents for every region and sub-county (national staff)", "grants": {}},
 ]
 CAPABILITIES += [
 	# Workspaces: which simple dashboard and menu a role gets. Admins never get these automatically.

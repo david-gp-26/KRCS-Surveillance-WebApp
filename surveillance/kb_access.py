@@ -33,11 +33,13 @@ from frappe.utils import cint
 
 from surveillance.capabilities import get_user_capabilities, has_capability
 
-POLICY_VERSION = "kb-access-3"
+POLICY_VERSION = "kb-access-4"
 MANAGE = "manage_knowledge_base"
 USE = "use_knowledge_base"
 SERVICE = "kb_service"
 SENSITIVE = "view_sensitive_kb"
+NATIONAL_SCOPE = "kb_national_scope"
+NATIONAL = "national"
 RESTRICTED = "view_restricted_kb"
 PUBLIC_PREFIXES = ("whatsapp:", "phone:", "sms:", "ussd:")
 ALL_ROLES = "All roles"
@@ -48,6 +50,42 @@ ALL_REGIONS = "All regions"
 AUDIENCE_CLASSES = {"Public": 0, "Community Health Worker": 1, "Professional": 2, "Restricted": 3}
 DEFAULT_AUDIENCE_CLASS = "Community Health Worker"   # existing staff documents keep their current reach
 PUBLIC = "Public"
+
+
+# ---------- scope hierarchy (R62: National -> County -> Region/operational area -> Sub-county/Camp -> Facility) ----------
+#
+# Documents carry scope tokens on every chunk: "national", "region:<id>", "subcounty:<id>" (and "county:<name>",
+# "facility:<id>" for finer documents). A user may read a document whose scope is their own unit, any unit above
+# it (inherited guidance) or any unit below it (they supervise it). Users with no assigned unit get national
+# guidance only; reading every scope needs the explicit capability kb_national_scope (no more "no region = all").
+
+def unit_scopes(region=None, sub_county=None):
+	"""Tokens a user at this unit may read."""
+	tokens = {NATIONAL}
+	if sub_county:
+		sc = frappe.db.get_value("Sub County", sub_county, ["name", "region", "county"], as_dict=True)
+		if sc:
+			tokens.add(f"subcounty:{sc.name}")
+			if sc.county:
+				tokens.add(f"county:{sc.county}")
+			region = region or sc.region
+			if sc.region:
+				tokens.add(f"region:{sc.region}")
+			for f in frappe.get_all("Reporting Facility", filters={"sub_county": sc.name}, pluck="name"):
+				tokens.add(f"facility:{f}")
+			return sorted(tokens)
+	if region:
+		tokens.add(f"region:{region}")
+		subs = frappe.get_all("Sub County", filters={"region": region}, fields=["name", "county"])
+		for sc in subs:
+			tokens.add(f"subcounty:{sc.name}")
+			if sc.county:
+				tokens.add(f"county:{sc.county}")
+		if subs:
+			for f in frappe.get_all("Reporting Facility", filters={"sub_county": ["in", [s.name for s in subs]]},
+					pluck="name"):
+				tokens.add(f"facility:{f}")
+	return sorted(tokens)
 
 
 def chw_roles():
@@ -110,7 +148,9 @@ def _staff_context(user, row):
 	roles = sorted(set(frappe.get_roles(user)) & surveillance_roles())
 	caps = set(get_user_capabilities(user))
 	level = actor_level(user, roles, caps)
+	national = NATIONAL_SCOPE in caps
 	return {
+		"scopes": None if national else unit_scopes(row.get("assigned_region"), row.get("assigned_sub_county")),
 		"user": user, "user_ref": user, "roles": roles,
 		"actor_class": "Community Health Worker" if level == 1 else "Staff",
 		"regions": [row.assigned_region] if row.get("assigned_region") else None,
@@ -127,7 +167,7 @@ def _public_context(ref):
 
 def _public_ctx(user, ref, actor_class="Public"):
 	"""Public actors read approved class-Public, non-sensitive documents only, in every region."""
-	return {"user": user, "user_ref": ref, "actor_class": actor_class, "roles": [], "regions": None,
+	return {"user": user, "user_ref": ref, "actor_class": actor_class, "roles": [], "regions": None, "scopes": None,
 		"sub_county": None, "capabilities": set(), "max_level": 0, "public_only": True, "sensitive": False}
 
 
@@ -176,7 +216,7 @@ def resolve(on_behalf_of=None, audience=None, region=None, include_drafts=0, pre
 		if not (has_capability(USE) or is_editor):
 			_deny("NO_CAPABILITY")
 		ctx = _staff_context(caller, caller_row or frappe._dict()) if caller != "Administrator" else \
-			{"user": caller, "user_ref": caller, "actor_class": "Staff", "roles": [], "regions": None,
+			{"user": caller, "user_ref": caller, "actor_class": "Staff", "roles": [], "regions": None, "scopes": None,
 				"sub_county": None, "capabilities": set(get_user_capabilities(caller)), "max_level": 3,
 				"public_only": False, "sensitive": True}
 		ctx.update(approved_only=True, preview=False)
@@ -216,8 +256,10 @@ def _preview_context(caller, audience, region, include_drafts):
 		return ctx
 	roles = _clean_roles(audience) if audience else None
 	staff = [r for r in (roles or []) if r != ALL_ROLES]
+	regions = _clean_regions(region) if region else None
 	return {"user": caller, "user_ref": caller, "actor_class": "Editor preview",
 		"roles": roles, "public_only": False, "sensitive": True,
+		"scopes": None if not regions else sorted({t for r in regions for t in unit_scopes(r)}),
 		"max_level": None if roles is None else actor_level(None, staff or ["_any_staff_"], set()),
 		"regions": _clean_regions(region) if region else None, "sub_county": None,
 		"approved_only": not cint(include_drafts), "preview": True,
@@ -227,6 +269,8 @@ def _preview_context(caller, audience, region, include_drafts):
 def _legacy_service_context(audience, region):
 	"""Pre-November contract (audience/region named by the service). Off unless kb_allow_legacy_audience."""
 	roles = _clean_roles(audience) or []
+	regions = _clean_regions(region)
 	return {"user": None, "user_ref": None, "actor_class": "Legacy service", "roles": roles,
+		"scopes": None if not regions else sorted({t for r in regions for t in unit_scopes(r)}),
 		"regions": _clean_regions(region), "sub_county": None, "approved_only": True, "preview": False,
 		"capabilities": set(), "max_level": actor_level(None, roles, set()), "public_only": False, "sensitive": False}
