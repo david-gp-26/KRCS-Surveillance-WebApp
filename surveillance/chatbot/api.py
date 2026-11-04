@@ -105,6 +105,7 @@ def chat(user, message, channel, language=None, selected_protocol_id=None):
 	if not str(message or "").strip():
 		frappe.throw(_("Please type a question."))
 	req = build_request(user, message, language, selected_protocol_id)
+	actor_class = kb_access._staff_context(user, row)["actor_class"]
 	lang = req["language"] or "en"
 	started = time.monotonic()
 	client = _client()
@@ -122,13 +123,13 @@ def chat(user, message, channel, language=None, selected_protocol_id=None):
 		frappe.log_error(title="Chatbot gateway: service unavailable", message=error)
 		reply = {"outcome": "escalate", "message": UNAVAILABLE[lang].format(contact=contact), "escalate": True}
 		log_id = chatbot_log.log_conversation(req, None, channel=channel, user=user, error=error, latency_ms=latency,
-			escalated_to=contact)
+			actor_class=actor_class, escalated_to=contact)
 		return {**reply, "options": [], "protocol": None, "log_id": log_id}
 
 	if response.get("outcome") == "count":
 		response = {**response, "message": _count_message(response, user, lang)}
 	log_id = chatbot_log.log_conversation(req, response, channel=channel, user=user, latency_ms=latency,
-		escalated_to=contact)
+		actor_class=actor_class, escalated_to=contact)
 	if log_id and (response.get("escalate") or response.get("outcome") == "escalate"):
 		chatbot_log.update(log_id, escalation_status="Open")
 	out = {k: response.get(k) for k in CLIENT_FIELDS}

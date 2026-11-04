@@ -470,7 +470,7 @@ export function exportCsv(filename, rows, columns) {
 // counts and escalations, with the user's roles and region decided by the server. Clarify options come back as
 // `options`; pass the chosen protocol_id as selectedProtocolId.
 export async function queryAiAssistant(question, { language, selectedProtocolId } = {}) {
-  const r = await callMethodPost('surveillance.chatbot.api.ask', {
+  const r = await callMethodPost('/api/method/surveillance.chatbot.api.ask', {
     message: question, language, selected_protocol_id: selectedProtocolId,
   })
   const options = Array.isArray(r?.options) ? r.options : []
@@ -898,8 +898,8 @@ export const askKnowledgeBase = ({ query, language, history = [], streamId, conv
 
 export const getKbPassage = (id) => kbRequest('get_passage', { id })
 
-export const getKbHealth = () => callMethod('surveillance.kb_ops.health')
-export const runKbReconcile = () => callMethodPost('surveillance.kb_ops.run_reconcile', {})
+export const getKbHealth = () => callMethod('/api/method/surveillance.kb_ops.health')
+export const runKbReconcile = () => callMethodPost('/api/method/surveillance.kb_ops.run_reconcile', {})
 
 export const getDiseaseVocabulary = () => kbRequest('get_disease_vocabulary')
 

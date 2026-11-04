@@ -21,6 +21,7 @@ from frappe import _
 from frappe.utils import add_days, cint, getdate, now_datetime, today
 
 from surveillance.capabilities import has_capability, require_capability
+from surveillance.kb_access import POLICY_VERSION
 
 DOCTYPE = "Chatbot Query Log"
 VIEW = "view_chatbot_logs"
@@ -313,7 +314,7 @@ def log_conversation(request, response=None, channel="API", user=None, error=Non
 	return log(
 		level="Conversation", route="chat", channel=channel, correlation_id=request.get("request_id"),
 		user=user, user_ref=request.get("user_ref"), caller=frappe.session.user,
-		actor_class=actor_class or ("Public" if not roles else None),
+		actor_class=actor_class or ("Public" if not roles else "Staff"), access_policy_version=POLICY_VERSION,
 		audience_roles=", ".join(roles) or "Guest", scope=request.get("location"),
 		language=request.get("language") or response.get("language"), query_text=request.get("message"),
 		answer=response.get("message"), answer_mode=response.get("outcome"), outcome=outcome, reason=reason,

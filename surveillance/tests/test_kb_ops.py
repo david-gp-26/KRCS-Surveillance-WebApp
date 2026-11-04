@@ -137,6 +137,18 @@ class TestKBOps(FrappeTestCase):
 		self.assertIn("KB-ORPHAN-TEST", r["deleted"])
 		self.assertEqual(self._points("KB-ORPHAN-TEST"), {})
 
+	def test_reconcile_requeues_only_documents_stuck_past_the_job_timeout(self):
+		stuck = h.add_document("Stuck doc", "# S\nmalaria stuck text")
+		recent = h.add_document("Recent doc", "# R\nmalaria recent text")
+		old = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-3 * kb_ops.INDEX_JOB_TIMEOUT)
+		frappe.db.set_value(kb.DOCTYPE, stuck, {"status": "Processing", "modified": old}, update_modified=False)
+		frappe.db.set_value(kb.DOCTYPE, recent, "status", "Processing")
+		r = kb_ops.reconcile(fix=True)
+		self.assertIn(stuck, r["stuck"])
+		self.assertIn(stuck, r["requeued"])
+		self.assertNotIn(recent, r["stuck"])
+		self.assertNotIn(recent, r["requeued"])
+
 	# ---- language and health ----
 	def test_chunk_language(self):
 		self.assertEqual(kb_ops.chunk_language("Mtoto ana homa na kuhara, tafadhali mpeleke kwa kituo cha afya na maji safi"),

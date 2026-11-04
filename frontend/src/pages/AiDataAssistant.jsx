@@ -2,12 +2,14 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { Plus, History, Trash2, Sparkles, Mic, ArrowUp } from 'lucide-react'
 import AppShell from '../components/layout/AppShell'
 import KbAnswer from '../components/assistant/KbAnswer'
-import { queryAiAssistant, askKnowledgeBase } from '../api/frappe'
+import { queryAiAssistant, askKnowledgeBase, currentUserId } from '../api/frappe'
 
-const STORAGE_KEY = 'krcs_ai_assistant_chats'
+// Chats are kept per signed-in user, so the next person on a shared device does not see them (R82).
+const LEGACY_STORAGE_KEY = 'krcs_ai_assistant_chats'
+const storageKey = () => `${LEGACY_STORAGE_KEY}:${currentUserId() || 'Guest'}`
 const MAX_CHATS = 50
 
-// queryAiAssistant is still mock-backed; flip this once it queries real data.
+// The Surveillance data source is not ready to offer yet; flip this when it is.
 const DATA_SOURCE_AVAILABLE = false
 
 const SUGGESTED_PROMPTS = {
@@ -37,7 +39,9 @@ function capChats(list) {
 
 function loadChats() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    // Older chats were stored with no owner, so nobody can safely be shown them.
+    localStorage.removeItem(LEGACY_STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey())
     const parsed = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed) ? capChats(parsed) : []
   } catch {
@@ -124,7 +128,7 @@ export default function AiDataAssistant() {
 
   function persistChats(next) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      localStorage.setItem(storageKey(), JSON.stringify(next))
     } catch {
       // storage unavailable or full; chats stay in memory only
     }
@@ -145,7 +149,8 @@ export default function AiDataAssistant() {
   }
 
   function changeLanguage(value) {
-    if (!updateCurrentChat({ language: value })) setDraftLanguage(value)
+    updateCurrentChat({ language: value })
+    setDraftLanguage(value) // the next New Query keeps this choice
   }
 
   function scrollToBottom() {
@@ -270,6 +275,12 @@ export default function AiDataAssistant() {
     runQuery(chatId, question, source, language)
   }
 
+  function rememberFeedback(index, value) {
+    updateCurrentChat({
+      messages: currentChat.messages.map((m, i) => (i === index ? { ...m, result: { ...m.result, feedback: value } } : m)),
+    })
+  }
+
   function retry(index) {
     if (isLoading || !currentChat) return
     const msg = currentChat.messages[index]
@@ -333,6 +344,7 @@ export default function AiDataAssistant() {
         <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-gray-100">
           <button
             onClick={startNewQuery}
+            aria-label="New Query"
             className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 sm:px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 shrink-0"
           >
             <Plus className="w-4 h-4" />
@@ -342,6 +354,7 @@ export default function AiDataAssistant() {
           <div className="relative shrink-0" ref={historyRef}>
             <button
               onClick={() => setShowHistory((v) => !v)}
+              aria-label="Your Chats"
               className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 sm:px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50"
             >
               <History className="w-4 h-4" />
@@ -352,22 +365,20 @@ export default function AiDataAssistant() {
               <div className="absolute right-0 mt-2 w-72 max-h-96 overflow-y-auto bg-white border border-gray-100 rounded-xl shadow-lg z-30 py-2">
                 {!chats.length && <div className="px-4 py-6 text-sm text-gray-400 text-center">No chats yet</div>}
                 {sortedChats.map((chat) => (
-                  <button
-                    key={chat.id}
-                    onClick={() => selectChat(chat.id)}
-                    className={['w-full text-left px-4 py-2.5 flex items-start justify-between gap-2 hover:bg-gray-50 group', chat.id === currentChatId ? 'bg-red-50' : ''].join(' ')}
-                  >
-                    <div className="min-w-0">
+                  <div key={chat.id} className={['group flex items-start gap-2 pr-3 hover:bg-gray-50', chat.id === currentChatId ? 'bg-red-50' : ''].join(' ')}>
+                    <button type="button" onClick={() => selectChat(chat.id)} className="min-w-0 flex-1 text-left pl-4 py-2.5">
                       <div className="text-sm font-medium text-gray-900 truncate">{chat.title}</div>
                       <div className="text-xs text-gray-400">{formatTime(chat.updatedAt)}</div>
-                    </div>
-                    <span
+                    </button>
+                    <button
+                      type="button"
                       onClick={(e) => { e.stopPropagation(); deleteChat(chat.id) }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-700 shrink-0 mt-0.5"
+                      aria-label={`Delete chat: ${chat.title}`}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-300 hover:text-red-700 shrink-0 mt-3"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                    </span>
-                  </button>
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -407,7 +418,7 @@ export default function AiDataAssistant() {
                       </div>
                       <div className="space-y-3 min-w-0">
                         {m.kind === 'kb' ? (
-                          <KbAnswer result={m.result} />
+                          <KbAnswer result={m.result} onFeedback={(value) => rememberFeedback(i, value)} />
                         ) : (
                         <div className="max-w-2xl text-[15px] leading-7 text-gray-800">
                           {m.content}
@@ -512,6 +523,7 @@ export default function AiDataAssistant() {
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={onKeydown}
                 rows={1}
+                aria-label="Your question"
                 placeholder={source === 'documents' ? 'Ask about KRCS protocols and guidelines...' : "Ask about health data... (e.g. 'Show cholera cases by region')"}
                 className="flex-1 bg-transparent resize-none focus:outline-none text-sm sm:text-base text-gray-800 placeholder:text-gray-400 py-1.5 max-h-40"
               ></textarea>
@@ -520,6 +532,7 @@ export default function AiDataAssistant() {
                 onClick={toggleVoice}
                 disabled={!voiceSupported}
                 title={voiceSupported ? 'Voice input' : 'Voice input not supported in this browser'}
+                aria-label="Voice input"
                 className={['rounded-full w-10 h-10 flex items-center justify-center shrink-0 border transition-colors',
                   isRecording ? 'bg-red-100 border-red-200 text-red-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100',
                   !voiceSupported ? 'opacity-40 cursor-not-allowed' : ''].join(' ')}
@@ -529,6 +542,7 @@ export default function AiDataAssistant() {
 
               <button
                 onClick={() => send()}
+                aria-label="Send"
                 disabled={!inputText.trim() || isLoading}
                 className="rounded-full w-10 h-10 flex items-center justify-center shrink-0 bg-red-600 text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-700 transition-colors"
               >

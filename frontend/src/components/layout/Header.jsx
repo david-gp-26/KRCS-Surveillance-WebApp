@@ -6,7 +6,8 @@ import {
   Sparkles,
   ChevronDown,
   Settings,
-  LogOut
+  LogOut,
+  Menu
 } from 'lucide-react'
 
 import {
@@ -18,7 +19,7 @@ import {
 } from '../../api/frappe'
 import { FOCUS, relTime } from '../../data/eventHelpers'
 
-export default function Header() {
+export default function Header({ onOpenNav }) {
   const navigate = useNavigate()
 
   const [fullName] = useState(currentUserFullName())
@@ -153,23 +154,30 @@ export default function Header() {
   async function handleLogout() {
     setMenuOpen(false)
     await logout()
-    navigate('/login')
+    // Full page load so nothing from this session stays in memory for the next user.
+    window.location.assign('/surveillance/login')
   }
 
   return (
-    <header className="bg-white px-8 py-4 h-20 flex items-center justify-between border-b border-gray-100">
-      <div>
-        <h1 className="text-lg font-semibold text-brand-navy leading-tight">Good {timeOfDay}, {firstName}!</h1>
-        <p className="text-xs text-gray-400 mt-0.5">{dateTimeLabel}</p>
+    <header className="bg-white px-4 lg:px-8 py-4 h-20 flex items-center justify-between gap-3 border-b border-gray-100">
+      <div className="flex items-center gap-3 min-w-0">
+        <button type="button" onClick={onOpenNav} aria-label="Open menu" className={`lg:hidden shrink-0 w-10 h-10 rounded-lg border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 ${FOCUS}`}>
+          <Menu className="w-5 h-5" />
+        </button>
+        <div className="min-w-0 hidden sm:block">
+          <h1 className="text-lg font-semibold text-brand-navy leading-tight truncate">Good {timeOfDay}, {firstName}!</h1>
+          <p className="text-xs text-gray-400 mt-0.5 truncate">{dateTimeLabel}</p>
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="bg-gray-100 rounded-full h-11 flex items-center gap-2 pl-1 pr-4 w-64">
+      <div className="flex items-center gap-3 shrink-0">
+        <div className="bg-gray-100 rounded-full h-11 hidden xl:flex items-center gap-2 pl-1 pr-4 w-64">
           <span className="w-9 h-9 rounded-full bg-white flex items-center justify-center shrink-0">
             <Search className="w-4 h-4 text-gray-600" />
           </span>
           <input
             type="text"
+            aria-label="Search"
             placeholder="Search..."
             className="bg-transparent flex-1 text-sm text-gray-900 placeholder-gray-500 focus:outline-none"
           />
@@ -229,6 +237,7 @@ export default function Header() {
           </div>
 
           <button
+            aria-label="Open AI assistant"
             className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors cursor-pointer"
             onClick={goToAiAssistant}
           >
@@ -238,19 +247,21 @@ export default function Header() {
 
         <div ref={menuRef} className="relative">
           <button
-            className="bg-gray-100 rounded-full h-11 flex items-center gap-2 pl-1.5 pr-3 hover:bg-gray-200 transition-colors cursor-pointer"
+            aria-label={`Account menu for ${fullName}`}
+            aria-expanded={menuOpen}
+            className="bg-gray-100 rounded-full h-11 flex items-center gap-2 pl-1.5 pr-1.5 sm:pr-3 hover:bg-gray-200 transition-colors cursor-pointer"
             onClick={() => setMenuOpen(!menuOpen)}
           >
             <span className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center text-xs font-semibold shrink-0">
               {initials}
             </span>
-            <span className="text-left leading-tight">
+            <span className="text-left leading-tight hidden sm:block">
               <span className="block text-sm font-semibold text-gray-900">{fullName}</span>
               <span className="block text-xs text-gray-500">
                 {userRole}
               </span>
             </span>
-            <ChevronDown className={['w-4 h-4 text-gray-500 transition-transform', menuOpen ? 'rotate-180' : ''].join(' ')} />
+            <ChevronDown className={['w-4 h-4 text-gray-500 transition-transform hidden sm:block', menuOpen ? 'rotate-180' : ''].join(' ')} />
           </button>
 
           {menuOpen && (

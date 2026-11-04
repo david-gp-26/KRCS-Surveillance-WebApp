@@ -14,7 +14,7 @@ export const SIDEBAR_MENU = [
     { label: 'Response Protocols', icon: 'Layers', page: 'response-protocols', requiresCapability: 'view_response_protocols' },
     { label: 'Response', icon: 'MessageSquareShare', page: 'response', requiresCapability: 'view_review_queue' },
     { label: 'Event Lifecycle', icon: 'LifeBuoy', page: 'event-lifecycle', requiresCapability: 'view_review_queue' },
-    { label: 'Knowledge Base', icon: 'BookOpen', page: 'knowledge-base', requiresCapability: null },
+    { label: 'Knowledge Base', icon: 'BookOpen', page: 'knowledge-base', requiresCapability: ['manage_knowledge_base', 'approve_knowledge_base'] },
     { label: 'AI Data Assistant', icon: 'Sparkles', page: 'ai-data-assistant', requiresCapability: null },
     { label: 'Chatbot Query Log', icon: 'MessagesSquare', page: 'chatbot-query-log', requiresCapability: 'view_chatbot_logs' },
   ]},
@@ -71,6 +71,7 @@ export const OFFICER_MENU = [
   { section: 'OPERATIONS', items: [
     { label: 'Response', icon: 'MessageSquareShare', page: 'response', requiresCapability: 'view_review_queue' },
     { label: 'Event Lifecycle', icon: 'LifeBuoy', page: 'event-lifecycle', requiresCapability: 'view_review_queue' },
+    { label: 'Chatbot Query Log', icon: 'MessagesSquare', page: 'chatbot-query-log', requiresCapability: 'view_chatbot_logs' },
   ]},
   { section: 'ANALYTICS', items: [
     { label: 'Data Quality', icon: 'CircleDashed', page: 'data-quality', requiresCapability: 'view_data_quality' },
@@ -96,5 +97,5 @@ export const WORKSPACE_PAGES = {
     'ai-data-assistant', 'feedback', 'help-center', 'settings', 'my-tasks'],
   officer: ['login', 'dashboard', 'alerts-signals', 'alerts-signals-detail', 'epi-trends', 'alert-detail', 'surveillance-map',
     'response', 'event-lifecycle', 'data-quality', 'analytics', 'ai-data-assistant', 'feedback', 'help-center', 'settings',
-    'reports', 'report-detail', 'response-protocols', 'my-tasks'],
+    'reports', 'report-detail', 'response-protocols', 'my-tasks', 'chatbot-query-log'],
 }

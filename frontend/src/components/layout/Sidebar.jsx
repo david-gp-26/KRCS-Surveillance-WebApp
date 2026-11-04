@@ -9,19 +9,19 @@ function iconFor(name) {
   return icons[name] || icons.Circle
 }
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose }) {
   const location = useLocation()
   const currentPage = location.pathname.replace('/', '').split('/')[0]
 
-  const { capabilities, workspace } = useCapabilities()
+  const { capabilities, workspace, has } = useCapabilities()
   const canSeeQueue = capabilities.includes('view_review_queue')
 
   const visibleMenu = useMemo(() =>
     (MENUS[workspace] || MENUS.full).map(group => ({
       ...group,
-      items: group.items.filter(item => !item.requiresCapability || capabilities.includes(item.requiresCapability)),
+      items: group.items.filter(item => !item.requiresCapability || has(item.requiresCapability)),
     })).filter(group => group.items.length > 0),
-    [capabilities, workspace]
+    [has, workspace]
   )
 
   const [newCount, setNewCount] = useState(0)
@@ -44,7 +44,11 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className={['bg-white border-r border-gray-100 h-screen sticky top-0 flex flex-col transition-all duration-300 shrink-0', collapsed ? 'w-20' : 'w-64'].join(' ')}>
+    <>
+    {open && <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={onClose} aria-hidden="true" />}
+    <aside className={['bg-white border-r border-gray-100 h-screen fixed lg:sticky top-0 left-0 z-40 flex flex-col transition-all duration-300 shrink-0 w-64',
+      open ? 'translate-x-0' : '-translate-x-full invisible lg:visible lg:translate-x-0',
+      collapsed ? 'lg:w-20' : ''].join(' ')}>
       <div className="flex items-center justify-between px-5 py-6">
         <div className="flex items-center overflow-hidden flex-1">
           <img
@@ -52,11 +56,14 @@ export default function Sidebar() {
             alt="Kenya Red Cross"
             className={[
               'object-contain object-left transition-all duration-300',
-              collapsed ? 'h-8 w-8' : 'h-13 w-full'
+              collapsed ? 'h-13 w-full lg:h-8 lg:w-8' : 'h-13 w-full'
             ].join(' ')}
           />
         </div>
-        <button onClick={toggle} className="border border-gray-200 rounded-full p-1 text-gray-400 hover:bg-gray-50 shrink-0">
+        <button type="button" onClick={onClose} aria-label="Close menu" className="lg:hidden border border-gray-200 rounded-full p-1 text-gray-400 hover:bg-gray-50 shrink-0">
+          <icons.X className="w-4 h-4" />
+        </button>
+        <button onClick={toggle} aria-label={collapsed ? 'Expand menu' : 'Collapse menu'} className="hidden lg:block border border-gray-200 rounded-full p-1 text-gray-400 hover:bg-gray-50 shrink-0">
           {!collapsed ? <icons.ChevronLeft className="w-4 h-4" /> : <icons.ChevronRight className="w-4 h-4" />}
         </button>
       </div>
@@ -64,20 +71,19 @@ export default function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 pb-6">
         {visibleMenu.map((group) => (
           <div key={group.section}>
-            {!collapsed && (
-              <div className="px-2 text-xs font-semibold text-gray-400 tracking-wide mb-2 mt-5">{group.section}</div>
-            )}
+            <div className={['px-2 text-xs font-semibold text-gray-400 tracking-wide mb-2 mt-5', collapsed ? 'lg:hidden' : ''].join(' ')}>{group.section}</div>
             {group.items.map((item) => {
               const Icon = iconFor(item.icon)
               return (
                 <Link
                   key={item.page}
                   to={`/${item.page}`}
+                  aria-label={item.label}
                   className={['relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium mb-1',
                     currentPage === item.page ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'].join(' ')}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
-                  {!collapsed && <span className="whitespace-nowrap">{item.label}</span>}
+                  <span className={['whitespace-nowrap', collapsed ? 'lg:hidden' : ''].join(' ')}>{item.label}</span>
                   {item.page === 'alerts-signals' && newCount > 0 && (
                     <span className={['bg-red-600 text-white text-[10px] font-semibold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center', collapsed ? 'absolute top-1 right-1 ring-2 ring-white' : 'ml-auto'].join(' ')}>
                       {newCount > 99 ? '99+' : newCount}
@@ -90,5 +96,6 @@ export default function Sidebar() {
         ))}
       </nav>
     </aside>
+    </>
   )
 }

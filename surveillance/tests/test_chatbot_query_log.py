@@ -133,6 +133,16 @@ class TestChatbotQueryLog(FrappeTestCase):
 		self.assertEqual((row.outcome, row.actor_class, row.escalation_status), ("Escalated", "Public", "Open"))
 		self.assertEqual(chatbot_log.find_by_correlation("cid-wa-1"), name)
 
+	def test_service_exchange_records_actor_class_and_policy(self):
+		"""SDS B.4.2.3: a Conversation row says who asked and which access policy applied."""
+		req = {"message": "cholera?", "roles": ["Community Health Promoter"], "user_ref": "someone@example.org"}
+		resp = {"outcome": "clarify", "message": "Did you mean?"}
+		row = frappe.get_doc("Chatbot Query Log", chatbot_log.log_conversation(req, resp, channel="Web"))
+		self.assertEqual(row.actor_class, "Staff")
+		self.assertEqual(row.access_policy_version, kb.ACCESS_POLICY_VERSION)
+		named = chatbot_log.log_conversation(req, resp, channel="Web", actor_class="Community Health Worker")
+		self.assertEqual(frappe.db.get_value("Chatbot Query Log", named, "actor_class"), "Community Health Worker")
+
 	def test_logging_never_breaks_answering(self):
 		with patch.object(frappe, "get_doc", side_effect=Exception("db down")):
 			self.assertIsNone(chatbot_log.log(level="Conversation", query_text="x", outcome="Matched"))

@@ -90,7 +90,7 @@ const CAPABILITY_BY_PAGE = {}
 const OPEN_PAGES = new Set()
 Object.values(MENUS).flatMap((menu) => menu.flatMap((group) => group.items)).forEach((item) => {
   if (!item.requiresCapability) OPEN_PAGES.add(item.page)
-  else (CAPABILITY_BY_PAGE[item.page] = CAPABILITY_BY_PAGE[item.page] || new Set()).add(item.requiresCapability)
+  else [].concat(item.requiresCapability).forEach((c) => (CAPABILITY_BY_PAGE[item.page] = CAPABILITY_BY_PAGE[item.page] || new Set()).add(c))
 })
 CAPABILITY_BY_PAGE['report-detail'] = CAPABILITY_BY_PAGE.reports
 

@@ -119,6 +119,9 @@ def _licence(model):
 	return {"model": model, "licence": "unknown", "approved_for_use": False}
 
 
+INDEX_JOB_TIMEOUT = 1800  # seconds; matches knowledge_base._enqueue
+
+
 def reconcile(fix=True):
 	"""Compare chunk counts in Qdrant with the database. Missing -> re-index; orphans -> delete."""
 	from surveillance import knowledge_base as kb
@@ -127,7 +130,11 @@ def reconcile(fix=True):
 	if not client.collection_exists(kb._collection()):
 		result["error"] = "collection does not exist"
 		return result
-	docs = {d.name: d for d in frappe.get_all(kb.DOCTYPE, fields=["name", "status", "chunks", "approval_status"])}
+	docs = {d.name: d for d in frappe.get_all(kb.DOCTYPE, fields=["name", "status", "chunks", "approval_status", "modified"])}
+	# A worker that dies mid-job leaves a document on Processing for good. Well past the job timeout, queue it again.
+	stuck_before = frappe.utils.add_to_date(frappe.utils.now_datetime(), seconds=-2 * INDEX_JOB_TIMEOUT)
+	result["stuck"] = sorted(n for n, d in docs.items() if d.status == "Processing"
+		and frappe.utils.get_datetime(d.modified) < stuck_before)
 	counts = {}
 	offset = None
 	while True:
@@ -148,7 +155,7 @@ def reconcile(fix=True):
 			result["mismatch"].append({"doc": name, "db": cint(d.chunks), "qdrant": have})
 	result["orphans"] = sorted(n for n in counts if n not in docs)
 	if fix:
-		for name in result["missing"] + [m["doc"] for m in result["mismatch"]]:
+		for name in result["missing"] + [m["doc"] for m in result["mismatch"]] + result["stuck"]:
 			frappe.db.set_value(kb.DOCTYPE, name, {"status": "Processing"})
 			kb._enqueue(name)
 			result["requeued"].append(name)
@@ -157,7 +164,7 @@ def reconcile(fix=True):
 			result["deleted"].append(name)
 		frappe.db.commit()
 	frappe.cache().set_value("kb_last_reconcile", {**result, "at": str(frappe.utils.now_datetime())})
-	if result["missing"] or result["mismatch"] or result["orphans"]:
+	if result["missing"] or result["mismatch"] or result["orphans"] or result["stuck"]:
 		frappe.log_error(title="Knowledge Base: index reconciliation found differences", message=frappe.as_json(result))
 	return result
 

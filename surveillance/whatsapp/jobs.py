@@ -312,7 +312,7 @@ def log_chatbot(request, response, session):
 def _escalation_target():
 	st = data.settings()
 	nums = numbers(st.escalation_numbers) or numbers(st.notify_numbers)
-	return ", ".join(nums) if nums else "WhatsApp escalation desk (no number set)"
+	return ", ".join(nums) if nums else "the KRCS escalation desk"
 
 
 def on_escalate(question, session, request, reason, error=None, response=None):

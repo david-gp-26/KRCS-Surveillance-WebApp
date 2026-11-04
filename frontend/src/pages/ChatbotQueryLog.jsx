@@ -152,7 +152,7 @@ export default function ChatbotQueryLog() {
 
         <section className={CARD}>
           {!rows ? <p className="p-8 text-sm text-gray-400">Loading…</p> : !rows.length ? <p className="p-10 text-center text-sm text-gray-400">No questions in this period.</p> : (
-            <div className="overflow-x-auto">
+            <div className="relative overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-left text-xs text-gray-500 border-b border-gray-100">
                   <tr><th className="px-4 py-2">When</th><th className="px-2">Channel</th><th className="px-2">Who</th><th className="px-2">Question</th><th className="px-2">Outcome</th><th className="px-2">Access</th><th className="px-2">Escalation</th><th className="px-2"><span className="sr-only">Open</span></th></tr>

@@ -1,6 +1,7 @@
 import { useState, Children, cloneElement, isValidElement } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Copy, Check, AlertTriangle } from 'lucide-react'
+import { Copy, Check, AlertTriangle, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { submitChatbotFeedback } from '../../api/frappe'
 
 const CITE = /\[(\d+)\]/g
 
@@ -36,10 +37,12 @@ function CiteChip({ source, n, onJump }) {
   )
 }
 
-export default function KbAnswer({ result }) {
+export default function KbAnswer({ result, onFeedback }) {
   const [copied, setCopied] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const [openN, setOpenN] = useState(null)
+  const [feedback, setFeedback] = useState(result?.feedback || null)
+  const [feedbackError, setFeedbackError] = useState(false)
 
   const answer = result?.answer ?? (result?.passages || []).map((p) => p.text).join('\n\n')
   const sources = Array.isArray(result?.sources) ? result.sources : []
@@ -101,6 +104,18 @@ export default function KbAnswer({ result }) {
       setTimeout(() => setCopied(false), 1500)
     } catch {
       setCopied(false)
+    }
+  }
+
+  async function rate(value) {
+    setFeedback(value)
+    setFeedbackError(false)
+    try {
+      await submitChatbotFeedback(result.log_id, value === 'yes')
+      onFeedback?.(value)
+    } catch {
+      setFeedback(null)
+      setFeedbackError(true)
     }
   }
 
@@ -172,15 +187,30 @@ export default function KbAnswer({ result }) {
 
       <div className="mt-2 flex items-center justify-between gap-3 text-xs leading-5 text-gray-400">
         <span>{footer.join(' · ')}</span>
-        <button
-          type="button"
-          onClick={copy}
-          aria-label="Copy answer"
-          title={copied ? 'Copied' : 'Copy'}
-          className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-        >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {result?.log_id && (
+            <>
+              <span className={feedbackError ? 'text-red-700' : ''}>
+                {feedbackError ? 'Could not save. Try again.' : feedback ? 'Thanks for your feedback' : 'Was this helpful?'}
+              </span>
+              <button type="button" onClick={() => rate('yes')} disabled={!!feedback} aria-label="Helpful" aria-pressed={feedback === 'yes'} title="Helpful" className={`rounded p-1 hover:bg-gray-100 ${feedback === 'yes' ? 'text-green-700' : 'text-gray-400'}`}>
+                <ThumbsUp className="h-3.5 w-3.5" />
+              </button>
+              <button type="button" onClick={() => rate('no')} disabled={!!feedback} aria-label="Not helpful" aria-pressed={feedback === 'no'} title="Not helpful" className={`rounded p-1 hover:bg-gray-100 ${feedback === 'no' ? 'text-red-700' : 'text-gray-400'}`}>
+                <ThumbsDown className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={copy}
+            aria-label="Copy answer"
+            title={copied ? 'Copied' : 'Copy'}
+            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          </button>
+        </div>
       </div>
     </div>
   )

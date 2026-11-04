@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { login } from '../api/frappe'
 
@@ -9,7 +8,6 @@ export default function Login() {
   const [error, setError] = useState('')
   const [showPwd, setShowPwd] = useState(false)
   const [loading, setLoading] = useState(false)
-  const navigate = useNavigate()
 
   async function handleLogin(e) {
     e.preventDefault()
@@ -18,7 +16,8 @@ export default function Login() {
     try {
       const ok = await login(usr, pwd)
       if (ok) {
-        navigate('/dashboard')
+        // Full page load: the CSRF token and capabilities come with the page, and the guest ones are now stale.
+        window.location.assign('/surveillance/dashboard')
       } else {
         setError('Invalid email or password. Please try again.')
       }

@@ -16,6 +16,13 @@ export function CapabilitiesProvider({ children }) {
       setCapabilities(caps)
       setPrimaryRole(primary_role)
       setWorkspace(ws || 'full')
+    } catch (e) {
+      // Guests have no capabilities. Keep what we have on other errors, such as a dropped connection.
+      if (e?.status === 401 || e?.status === 403) {
+        setCapabilities([])
+        setPrimaryRole('')
+        setWorkspace('full')
+      }
     } finally {
       setLoading(false)
     }
