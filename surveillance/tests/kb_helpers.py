@@ -5,8 +5,10 @@ fast, repeatable and never touch the live index or download models:
     dense  = hashed bag of words (64 dims, L2-normalised): texts sharing words score higher
     sparse = hashed term counts
     re-ranker off
+The krcs_search service is replaced by fake_search_service; it has its own tests in that repo.
 """
 import hashlib
+import json
 import math
 import re
 import uuid
@@ -37,7 +39,7 @@ def fake_embed(texts):
 	return out
 
 
-def fake_sparse(texts, query=False):
+def fake_sparse(texts):
 	from qdrant_client.models import SparseVector
 	out = []
 	for t in texts:
@@ -47,6 +49,44 @@ def fake_sparse(texts, query=False):
 			counts[i] = counts.get(i, 0) + 1.0
 		out.append(SparseVector(indices=list(counts), values=list(counts.values())))
 	return out
+
+
+def fake_search_service(body):
+	"""Same contract and ranking rules as krcs_search, without its models. The JSON round trip is what the real
+	request goes through, so the filter is applied exactly as the service would receive it."""
+	from qdrant_client.models import Filter, Fusion, FusionQuery, Prefetch
+	body = json.loads(json.dumps(body))
+	client = kb._qdrant()
+	if not client.collection_exists(body["collection"]):
+		return {"points": [], "reranked": False}
+	flt = Filter.model_validate(body["filter"]) if body["filter"] else None
+	text = body["expanded_query"]
+	hits = client.query_points(body["collection"],
+		prefetch=[
+			Prefetch(query=fake_embed([text])[0], using=kb.DENSE, filter=flt, limit=30),
+			Prefetch(query=fake_sparse([text])[0], using=kb.SPARSE, filter=flt, limit=30),
+		],
+		query=FusionQuery(fusion=Fusion.RRF), limit=30, with_payload=True).points
+	ranked = []
+	for h in hits:
+		if kb._expired(h.payload):
+			continue
+		lang = h.payload.get("chunk_language") or h.payload.get("language")
+		ranked.append((h.score + (0.05 if body["language"] and lang == body["language"] else 0), h))
+	ranked.sort(key=lambda x: -x[0])
+	question = fake_embed([body["query"]])[0]
+	points, per_section = [], {}
+	for score, h in ranked:
+		key = (h.payload.get("doc"), h.payload.get("section"))
+		if per_section.get(key, 0) >= 2:
+			continue
+		per_section[key] = per_section.get(key, 0) + 1
+		vector = fake_embed([h.payload.get("text") or ""])[0]
+		points.append({"id": str(h.id), "rank_score": score, "payload": h.payload,
+			"dense_score": sum(a * b for a, b in zip(question, vector))})
+		if len(points) >= body["limit"]:
+			break
+	return {"points": points, "reranked": False}
 
 
 @contextmanager
@@ -62,7 +102,7 @@ def kb_sandbox(**conf):
 		# patch the functions too: frappe.conf can be reloaded mid-test, and the live collection must never be touched
 		with patch.object(kb, "embed", fake_embed), patch.object(kb, "sparse_embed", fake_sparse), \
 				patch.object(kb, "_enqueue", lambda name: None), patch.object(kb, "_collection", lambda: collection), \
-				patch.object(kb, "_rerank_model", lambda: None):
+				patch.object(kb, "_search_service", fake_search_service):
 			yield collection
 	finally:
 		try:

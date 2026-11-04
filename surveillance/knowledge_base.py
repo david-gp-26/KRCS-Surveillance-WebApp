@@ -9,9 +9,9 @@ chunk's payload and kept in sync without re-indexing.
 
 Answering (retrieval-augmented generation, all open source, nothing leaves the server):
     1. question  -> disease detection and synonym expansion (Alert Threshold Config synonyms)
-    2. hybrid search in Qdrant: dense vectors (meaning) + BM25 sparse vectors (exact words such as
-       "AWD", "505", drug names), merged with reciprocal rank fusion
-    3. re-rank the top candidates with a multilingual cross-encoder and keep the best few
+    2. the krcs_search service (outside Frappe) runs hybrid search in Qdrant: dense vectors (meaning) + BM25 sparse
+       vectors (exact words such as "AWD", "505", drug names), merged with reciprocal rank fusion
+    3. it re-ranks the top candidates with a multilingual cross-encoder and returns the best few
     4. a local LLM (Qwen via Ollama) writes ONE answer using only those passages, citing them [1] [2];
        if the passages do not cover the question it says so instead of guessing
     5. the answer can stream to the browser word by word (Frappe realtime)
@@ -19,10 +19,17 @@ If the LLM is unreachable, ask() still returns the best passages (mode "passages
 
 APIs: ask() for the assistant page; search() and get_passage() for the chatbot (David).
 
+Frappe decides who may see what, builds the Qdrant filter from that decision, re-checks every passage returned and
+writes the Query Log. The search service holds no access rules. Indexing stays here, so the embedding and sparse
+models must match the service's: it refuses a request that names different models.
+
 Site config (bench --site <site> set-config <key> <value>):
     qdrant_url            default http://localhost:6333
     qdrant_api_key        optional
     kb_collection         default krcs_kb_v2 (hybrid collection; run reindex_all after first install)
+    kb_search_url         default http://localhost:8900 (the krcs_search service)
+    kb_search_api_key     the key krcs_search was started with
+    kb_search_timeout     default 60 (seconds)
     kb_embedding_model    default sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
     kb_sparse_model       default Qdrant/bm25
     kb_reranker_model     default jinaai/jina-reranker-v2-base-multilingual ("off" to disable)
@@ -39,6 +46,7 @@ import os
 import re
 import time
 import uuid
+from types import SimpleNamespace
 
 import frappe
 from frappe import _
@@ -62,7 +70,6 @@ VERSION_RE = re.compile(r"^v\d+(\.\d+){0,2}$")   # v1, v1.2, v1.2.3
 # changing any of these on an Approved document can widen who sees it: it goes back to Draft (R60, R62)
 GOVERNED_FIELDS = ("category", "version", "applied_to", "diseases", "regions", "language", "audience_class",
 	"sensitivity", "authority", "conflicts_with", "sub_counties")
-LANGUAGE_BOOST = 0.05   # added to the score of passages in the asker's language when ranking
 MAX_LIMIT = 20
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt", "md"}
 MAX_BYTES = 25 * 1024 * 1024
@@ -73,7 +80,6 @@ DEFAULT_SPARSE = "Qdrant/bm25"
 DEFAULT_RERANKER = "jinaai/jina-reranker-v2-base-multilingual"
 DEFAULT_LLM = "qwen3:4b"
 DENSE, SPARSE = "dense", "bm25"   # named vectors in the hybrid collection
-CANDIDATES = 30                   # passages fetched before re-ranking
 CONTEXT_PASSAGES = 5              # passages given to the LLM
 NOT_FOUND = {
 	"English": "I couldn't find this in the approved KRCS documents. Please check with your supervisor or the relevant guideline.",
@@ -85,7 +91,6 @@ OPEN_START, OPEN_END = 0, 99991231
 
 _model = None
 _sparse_model = None
-_reranker = None
 
 
 class KBUnavailable(frappe.ValidationError):
@@ -150,27 +155,10 @@ def _sparse():
 	return _sparse_model
 
 
-def sparse_embed(texts, query=False):
+def sparse_embed(texts):
 	from qdrant_client.models import SparseVector
-	model = _sparse()
-	vecs = model.query_embed(texts) if query else model.embed(texts)
+	vecs = _sparse().embed(texts)
 	return [SparseVector(indices=v.indices.tolist(), values=v.values.tolist()) for v in vecs]
-
-
-def _rerank_model():
-	"""Cross-encoder re-ranker, or None if disabled or not loadable (search still works without it)."""
-	global _reranker
-	name = _conf("kb_reranker_model", DEFAULT_RERANKER)
-	if name == "off":
-		return None
-	if _reranker is None:
-		try:
-			from fastembed.rerank.cross_encoder import TextCrossEncoder
-			_reranker = TextCrossEncoder(model_name=name, cache_dir=_cache_dir())
-		except Exception:
-			frappe.log_error(title="Knowledge Base: re-ranker could not load")
-			_reranker = False
-	return _reranker or None
 
 
 def _ensure_collection(client, size):
@@ -966,63 +954,80 @@ def _client():
 		frappe.throw(_("The knowledge base is temporarily unavailable. Please try again shortly."), KBUnavailable)
 
 
-def _retrieve(query, ctx, category=None, disease=None, language=None, limit=CONTEXT_PASSAGES):
-	"""Hybrid search + re-rank. Returns (detected_disease, [(rank_score, point)]) best first."""
-	from qdrant_client.models import Fusion, FusionQuery, Prefetch
-	detected = _detect_disease(query)
-	expanded = f"{query} ({detected['name']})" if detected else query  # e.g. "kipindupindu" -> cholera
-	client = _client()
-	if not client.collection_exists(_collection()):
-		return detected, []
-	flt = _filter(ctx, category, disease)
+def _search_models():
+	"""The models this site's index was built for. The search service refuses a request if it runs anything else."""
+	return {
+		"embedding": _conf("kb_embedding_model", DEFAULT_MODEL),
+		"sparse": _conf("kb_sparse_model", DEFAULT_SPARSE),
+		"reranker": _conf("kb_reranker_model", DEFAULT_RERANKER),
+	}
+
+
+def _search_url():
+	return _conf("kb_search_url", "http://localhost:8900").rstrip("/")
+
+
+def _search_headers():
+	return {"Authorization": f"Bearer {_conf('kb_search_api_key', '')}"}
+
+
+def _search_service(body):
+	"""POST /v1/search on the krcs_search service. Any failure is a 503 for the caller, like Qdrant being down."""
+	import requests
+	status = None
 	try:
-		hits = client.query_points(_collection(),
-			prefetch=[
-				Prefetch(query=embed([expanded])[0], using=DENSE, filter=flt, limit=CANDIDATES),
-				Prefetch(query=sparse_embed([expanded], query=True)[0], using=SPARSE, filter=flt, limit=CANDIDATES),
-			],
-			query=FusionQuery(fusion=Fusion.RRF), limit=CANDIDATES, with_payload=True).points
+		r = requests.post(f"{_search_url()}/v1/search", json=body, headers=_search_headers(),
+			timeout=float(_conf("kb_search_timeout", 60)))
+		status = r.status_code
+		if status == 200:
+			return r.json()
+		# only the 409 body: it names the models, while other error bodies can echo the question
+		frappe.log_error(title=f"Knowledge Base: search service returned {status}", message=r.text[:500] if status == 409 else "")
 	except Exception:
-		frappe.log_error(title="Knowledge Base: search failed")
-		frappe.throw(_("The knowledge base is temporarily unavailable. Please try again shortly."), KBUnavailable)
-
-	hits = [h for h in hits if not _expired(h.payload)]
-	if not hits:
-		return detected, []
-	reranker = _rerank_model()
-	if reranker:
-		import math
-		# cross-encoder logits -> 0-1 relevance
-		scores = [1 / (1 + math.exp(-float(x))) for x in reranker.rerank(query, [h.payload.get("text") or "" for h in hits])]
-	else:
-		scores = [h.score for h in hits]
-	ranked = []
-	for h, sc in zip(hits, scores):
-		lang = h.payload.get("chunk_language") or h.payload.get("language")
-		boost = LANGUAGE_BOOST if language and lang == language else 0
-		ranked.append((float(sc) + boost, h))
-	ranked.sort(key=lambda x: -x[0])
-
-	# keep the best passages, at most 2 per document section so one long section can't crowd out the rest
-	out, per_section = [], {}
-	for sc, h in ranked:
-		key = (h.payload.get("doc"), h.payload.get("section"))
-		if per_section.get(key, 0) >= 2:
-			continue
-		per_section[key] = per_section.get(key, 0) + 1
-		out.append((sc, h))
-		if len(out) >= limit:
-			break
-	return detected, out
+		frappe.log_error(title="Knowledge Base: search service unreachable")
+	frappe.throw(_("The knowledge base is temporarily unavailable. Please try again shortly."), KBUnavailable)
 
 
-def _dense_scores(query, points):
-	"""Cosine similarity (0-1) of each passage to the question, for the confidence label."""
-	import numpy as np
-	q = np.array(embed([query])[0])
-	vecs = np.array(embed([p.payload.get("text") or "" for p in points]))
-	sims = vecs @ q / (np.linalg.norm(vecs, axis=1) * np.linalg.norm(q) + 1e-9)
-	return [float(x) for x in sims]
+def search_service_status():
+	"""For the Health tab."""
+	import requests
+	try:
+		r = requests.get(f"{_search_url()}/v1/info", headers=_search_headers(), timeout=5)
+		r.raise_for_status()
+		info = r.json()
+	except Exception as e:
+		return {"reachable": False, "url": _search_url(), "error": type(e).__name__}
+	return {"reachable": True, "url": _search_url(), "ready": bool(info.get("ready")),
+		"reranker_loaded": bool(info.get("reranker_loaded")), "models": info.get("models"),
+		"models_match": info.get("models") == _search_models()}
+
+
+def _retrieve(query, ctx, category=None, disease=None, language=None, limit=CONTEXT_PASSAGES):
+	"""Best passages from the search service, which applies the filter built here from the asker's access.
+	Returns (detected_disease, [(rank_score, point)] best first, whether the re-ranker scored them)."""
+	detected = _detect_disease(query)
+	flt = _filter(ctx, category, disease)
+	reply = _search_service({
+		"query": query,
+		"expanded_query": f"{query} ({detected['name']})" if detected else query,  # e.g. "kipindupindu" -> cholera
+		"collection": _collection(),
+		"filter": flt.model_dump(mode="json", exclude_none=True) if flt else None,
+		"language": language,
+		"limit": limit,
+		"today": str(today()),
+		"models": _search_models(),
+	})
+	ranked, hidden = [], 0
+	for p in reply["points"]:
+		# the access decision stays here: a fault in the service must not become a leak
+		if _visible(p["payload"], ctx):
+			ranked.append((float(p["rank_score"]), SimpleNamespace(id=p["id"], payload=p["payload"], dense=float(p["dense_score"]))))
+		else:
+			hidden += 1
+	if hidden:
+		frappe.log_error(title="Knowledge Base: search service returned passages outside the filter",
+			message=f"{hidden} passage(s) dropped; policy {ACCESS_POLICY_VERSION}")
+	return detected, ranked, bool(reply.get("reranked"))
 
 
 @frappe.whitelist()
@@ -1048,7 +1053,7 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 	limit = max(1, min(cint(limit) or 5, MAX_LIMIT))
 	t = _thresholds()
 	try:
-		detected, ranked = _retrieve(query, ctx, category, disease, language, limit)
+		detected, ranked, _reranked = _retrieve(query, ctx, category, disease, language, limit)
 	except KBUnavailable as e:
 		audit.failed(e)
 		raise
@@ -1063,8 +1068,7 @@ def search(query, limit=5, category=None, disease=None, audience=None, region=No
 			"score_range": [0, 1], "confidence_thresholds": t, "took_ms": int((time.monotonic() - started) * 1000),
 			"log_id": audit.name, "correlation_id": audit.correlation_id, "actor_class": ctx.get("actor_class"),
 			"public": None}
-	points = [h for _, h in ranked]
-	sims = _dense_scores(query, points) if points else []
+	sims = [h.dense for _, h in ranked]
 	results = [_result(h.id, s, h.payload, t) | {"rank_score": round(rs, 3)}
 		for (rs, h), s in zip(ranked, sims)]
 	public, withheld = None, []
@@ -1223,7 +1227,7 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 	last_user = next((m["content"] for m in reversed(hist) if m["role"] == "user"), "")
 	search_q = f"{last_user} {query}" if last_user and len(query.split()) <= 6 else query
 	try:
-		detected, ranked = _retrieve(search_q, ctx, category, disease, language, CONTEXT_PASSAGES)
+		detected, ranked, reranked = _retrieve(search_q, ctx, category, disease, language, CONTEXT_PASSAGES)
 	except KBUnavailable as e:
 		audit.failed(e)
 		raise
@@ -1257,12 +1261,11 @@ def ask(query, language=None, history=None, stream_id=None, category=None, disea
 
 	if not ranked:
 		return no_match([], "no_results")
-	points = [h for _, h in ranked]
-	dense = _dense_scores(search_q, points)   # the text actually searched (a follow-up includes the earlier turn)
+	dense = [h.dense for _, h in ranked]   # scored against the text actually searched (a follow-up includes the earlier turn)
 	trace = _passage_trace([(rs, d, p, False) for (rs, p), d in zip(ranked, dense)])
 
 	# KB-11: evidence decides no-match, with or without the re-ranker
-	floor_ok = (ranked[0][0] >= float(_conf("kb_min_rerank_score", 0.15))) if _rerank_model() \
+	floor_ok = (ranked[0][0] >= float(_conf("kb_min_rerank_score", 0.15))) if reranked \
 		else (max(dense) >= float(_conf("kb_min_dense_score", 0.30)))
 	if not floor_ok:
 		return no_match(trace, "below_score_floor")

@@ -334,6 +334,3 @@ has_permission = {
 
 # Mobile app background sync: "Authorization: device <key>:<secret>" (one key per phone, see field_api)
 auth_hooks = ["surveillance.field_api.device_auth"]
-
-# Knowledge Base: load the search models in each web worker after its first request (KB-20)
-before_request = ["surveillance.kb_ops.warm_in_background"]

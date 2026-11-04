@@ -200,6 +200,7 @@ def health():
 		"llm": kb._conf("kb_llm_model", kb.DEFAULT_LLM),
 	}
 	out["models"] = {k: _licence(v) for k, v in models.items()}
+	out["search_service"] = kb.search_service_status()
 	try:
 		out["llm"] = kb.llm_status()
 	except Exception as e:
@@ -212,6 +213,16 @@ def health():
 		for k, v in out["models"].items() if not v["approved_for_use"]]
 	if not out.get("qdrant", {}).get("api_key"):
 		out["warnings"].append("Qdrant has no API key configured (use a key and TLS or a private network in production)")
+	service = out["search_service"]
+	if not service["reachable"]:
+		out["warnings"].append(f"The search service at {service['url']} is not reachable ({service['error']}): searches will fail")
+	else:
+		if not service["models_match"]:
+			out["warnings"].append("The search service runs different models from this site: searches will fail until they match")
+		if not service["ready"]:
+			out["warnings"].append("The search service is still loading its models")
+		elif models["reranker"] != "off" and not service["reranker_loaded"]:
+			out["warnings"].append("The search service could not load its re-ranker: results are not re-ranked")
 	return out
 
 
@@ -220,40 +231,3 @@ def run_reconcile():
 	from surveillance import knowledge_base as kb
 	require_capability(kb.CAPABILITY)
 	return reconcile(fix=True)
-
-
-_warm = {"started": False}
-
-
-def warm_in_background():
-	"""before_request hook: the first request a web worker serves starts loading the models in a thread, so the
-	first question after a restart does not wait for them (KB-20 / R84)."""
-	if _warm["started"] or not frappe.conf.get("kb_warm_up", 1):
-		return
-	_warm["started"] = True
-	import threading
-	site = frappe.local.site
-
-	def run():
-		try:
-			frappe.init(site=site)
-			frappe.connect()
-			warm_up()
-		except Exception:
-			pass
-		finally:
-			frappe.destroy()
-
-	threading.Thread(target=run, daemon=True, name="kb-warm-up").start()
-
-
-def warm_up():
-	"""Load the embedding, sparse and re-rank models into this process (run after deploy / restart):
-	bench --site <site> execute surveillance.kb_ops.warm_up"""
-	from surveillance import knowledge_base as kb
-	kb.embed(["warm up"])
-	kb.sparse_embed(["warm up"], query=True)
-	model = kb._rerank_model()
-	if model:
-		list(model.rerank("warm up", ["warm up"]))
-	return "ok"
