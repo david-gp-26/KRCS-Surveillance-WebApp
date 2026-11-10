@@ -18,6 +18,7 @@ from surveillance.whatsapp.conversation.free_text import describe
 from surveillance.whatsapp.conversation.report import begin_report, report_from_question, seed_report
 from surveillance.whatsapp.conversation.steps import ask, choose, first_missing, missing_steps
 from surveillance.whatsapp.messages import menu, text
+from surveillance.whatsapp.redact import pseudonym, redact
 
 
 def _chatbot_options(s, ctx):
@@ -26,6 +27,13 @@ def _chatbot_options(s, ctx):
 		if ctx.chatbot
 		else []
 	)
+
+
+def _user_ref(s, ctx):
+	"""Staff by login, as the chatbot's access decision needs. A community member's number stays in Frappe."""
+	if s.staff:
+		return s.staff.user
+	return pseudonym(normalize_phone(s.phone), getattr(ctx, "pseudonym_key", None))
 
 
 def _is_question(inp, ctx):
@@ -88,7 +96,7 @@ class RNotReport(State):
 			s.draft = None
 			if ctx.chatbot:
 				return ask_chatbot(s, question, ctx)
-			req = {"request_id": str(uuid.uuid4()), "user_ref": f"whatsapp:+{normalize_phone(s.phone)}"}
+			req = {"request_id": str(uuid.uuid4()), "user_ref": _user_ref(s, ctx)}
 			_call(ctx, "on_escalate", question=question, session=s, request=req, reason="not_a_report")
 			return go("r_done", text(t(s)["notReportPassed"]))
 		if inp["type"] == "text" and len(normalize(inp.get("text"))) >= 3:
@@ -103,12 +111,12 @@ def ask_chatbot(s, question, ctx, selected_protocol_id=None):
 	s.page = 0
 	roles = ctx.data.roles_of(s.staff.user) if s.staff else []
 	req = {
-		"message": question,
+		"message": redact(question),
 		"roles": roles or ["Guest"],
 		"language": s.lang,
 		"location": s.staff.region if s.staff else None,
 		"selected_protocol_id": selected_protocol_id,
-		"user_ref": s.staff.user if s.staff else f"whatsapp:+{normalize_phone(s.phone)}",
+		"user_ref": _user_ref(s, ctx),
 		"request_id": str(uuid.uuid4()),
 		# The bot does not run report counts for the user, so it never offers that capability.
 		"capabilities": [],

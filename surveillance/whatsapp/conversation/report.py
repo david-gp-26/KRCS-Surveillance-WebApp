@@ -43,6 +43,22 @@ from surveillance.whatsapp.extract import extract_report
 from surveillance.whatsapp.messages import text
 
 
+def transcribed(s, inp, ctx):
+	"""The words of a voice note (AI/ML §6.3), which then go the way typed words do. None: the reporter is asked to type.
+	The menu language is not sent: someone reading Kiswahili menus may speak English or a mix, and the service picks
+	its model by the language it hears."""
+	transcribe = getattr(ctx, "transcribe", None)
+	if inp.get("kind") != "audio" or not transcribe:
+		return None
+	try:
+		words = (transcribe(inp) or "").strip()
+	except Exception:
+		if getattr(ctx, "log_error", None):
+			ctx.log_error("WhatsApp voice note could not be transcribed")
+		return None
+	return words if len(normalize(words)) >= 3 else None
+
+
 class RDescribe(State):
 	"""Community members first describe what is happening in their own words (AI/ML §1.4, SRS H.12)."""
 
@@ -66,6 +82,12 @@ class RDescribe(State):
 			s.draft.media.append(to_media(inp))
 			if len(normalize(inp.get("caption"))) >= 3:
 				return describe(s, inp["caption"], ctx)
+			words = transcribed(s, inp, ctx)
+			if words:
+				s.draft.transcribed = True
+				res = describe(s, words, ctx)
+				res["say"].insert(0, text(t(s)["heard"](_clip(words, 800))))
+				return res
 			body = t(s)["describeVoice"] if inp.get("kind") == "audio" else t(s)["describeMedia"]
 			return quiet(choose(s, body, self.options(s, ctx)))
 		if inp["type"] == "location":

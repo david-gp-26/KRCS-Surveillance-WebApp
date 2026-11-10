@@ -35,7 +35,15 @@
   "extraction_section",
   "extraction_url",
   "column_break_extraction",
-  "extraction_token"
+  "extraction_token",
+  "voice_section",
+  "voice_transcription",
+  "column_break_voice",
+  "transcription_timeout",
+  "retention_section",
+  "session_retention_days",
+  "column_break_retention",
+  "media_retention_days"
  ],
  "fields": [
   {
@@ -223,12 +231,58 @@
    "fieldname": "extraction_token",
    "fieldtype": "Password",
    "label": "Extraction Token"
+  },
+  {
+   "fieldname": "voice_section",
+   "fieldtype": "Section Break",
+   "label": "Voice Notes"
+  },
+  {
+   "default": "0",
+   "description": "Community reports: read a voice note with POST /transcribe on the extraction or chatbot service. Turn on after the service has a speech model and its word error rate is checked on real audio.",
+   "fieldname": "voice_transcription",
+   "fieldtype": "Check",
+   "label": "Transcribe Voice Notes"
+  },
+  {
+   "fieldname": "column_break_voice",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "45",
+   "description": "Seconds. After this the reporter is asked to type instead.",
+   "fieldname": "transcription_timeout",
+   "fieldtype": "Int",
+   "label": "Transcription Timeout"
+  },
+  {
+   "fieldname": "retention_section",
+   "fieldtype": "Section Break",
+   "label": "Retention"
+  },
+  {
+   "default": "30",
+   "description": "Days an unfinished report and conversation state are kept after the last message.",
+   "fieldname": "session_retention_days",
+   "fieldtype": "Int",
+   "label": "Conversation Retention (days)"
+  },
+  {
+   "fieldname": "column_break_retention",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Days before photos, voice notes and files on WhatsApp reports are deleted. 0 keeps them. Set the period KRCS approves.",
+   "fieldname": "media_retention_days",
+   "fieldtype": "Int",
+   "label": "Media Retention (days)"
   }
  ],
  "grid_page_length": 50,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-04 15:00:00.000000",
+ "modified": "2026-11-06 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "WhatsApp Settings",

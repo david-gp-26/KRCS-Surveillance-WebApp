@@ -1,4 +1,5 @@
-"""Conversation state per phone number, in Redis (frappe.cache), kept for 30 days of inactivity.
+"""Conversation state per phone number, in Redis (frappe.cache), kept after the last message for the number of days
+in WhatsApp Settings (30 unless changed).
 
 Survives app restarts and deploys. Redis is not persisted on a standard bench, so a restart of
 redis-cache itself (e.g. a server reboot) loses unfinished drafts; submitted reports are safe in the database.
@@ -7,11 +8,14 @@ redis-cache itself (e.g. a server reboot) loses unfinished drafts; submitted rep
 import json
 
 import frappe
+from frappe.utils import cint
 
+from surveillance.whatsapp import data
 from surveillance.whatsapp.conversation import AttrDict, new_session
 
 KEY = "whatsapp:session:{}"
-TTL = 30 * 24 * 3600
+DEFAULT_DAYS = 30
+DAY = 24 * 3600
 
 
 def load(phone):
@@ -22,7 +26,8 @@ def load(phone):
 
 
 def save(session):
-	frappe.cache.set_value(KEY.format(session.phone), json.dumps(session, default=str), expires_in_sec=TTL)
+	days = cint(data.settings().session_retention_days) or DEFAULT_DAYS
+	frappe.cache.set_value(KEY.format(session.phone), json.dumps(session, default=str), expires_in_sec=days * DAY)
 
 
 def clear(phone):

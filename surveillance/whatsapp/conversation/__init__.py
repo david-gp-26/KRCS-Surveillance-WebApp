@@ -12,6 +12,7 @@ The report steps follow the web "Record Health Signal" form and end in an ordina
 	report.py     starting a report, review, duplicate check, edit, saving, what the reporter sees afterwards
 	status.py     report status, recent reports, lookup by reference
 	ask.py        questions to the Response Support Chatbot
+	privacy.py    the privacy notice, consent and the PRIVACY keyword
 	portal.py     welcome, language, staff portal, help, resume
 	__init__.py   handle(): global keywords (menu, cancel, back...) and the state table
 
@@ -24,6 +25,9 @@ This package does not import frappe: everything it needs comes in through `ctx`
         ctx.now()     epoch seconds
         ctx.chatbot   Response Support Chatbot client, or None
         ctx.extractor free-text extraction client (extract.ExtractionClient), or None for the keyword fallback
+        ctx.transcribe(input) -> text of a voice note, or None (optional); the service detects the spoken language
+        ctx.pseudonym_key  secret for the reference that stands in for a community member's number
+        ctx.on_privacy(phone, event, version, language, message_id)   saves an answer to the privacy notice
         ctx.on_submit(report, session, media, extraction), ctx.on_extract(report, session, draft),
         ctx.on_chatbot(request, response, session),
         ctx.on_escalate(question=, session=, request=, reason=, ...), ctx.log_error(title)   (all optional)
@@ -73,6 +77,7 @@ from surveillance.whatsapp.conversation.fields import (
 	SelectStep,
 )
 from surveillance.whatsapp.conversation.portal import Help, Lang, Menu, NotStaff, Reports, Resume, Welcome
+from surveillance.whatsapp.conversation.privacy import Privacy, PrivacyNotice, needs_notice, notice_gate
 from surveillance.whatsapp.conversation.report import (
 	RConsent,
 	RDescribe,
@@ -123,16 +128,24 @@ def staff_still_valid(s, ctx):
 
 def dispatch(s, inp, ctx):
 	now = ctx.now()
+	previous_active = s.last_active
 	first = not s.last_active
 	idle = not first and now - s.last_active > ctx.settings.idle_minutes * MIN
 	s.last_active = now
+	kw = normalize(inp.get("text")) if inp["type"] == "text" else None
+
+	if kw and kw in C.KEYWORDS["privacy"]:
+		if s.draft and s.state != "resume":
+			s.resume_state = s.state
+		return enter(s, "privacy", ctx)
+	if needs_notice(s) and s.state != "privacy":
+		return notice_gate(s, inp, ctx, previous_active, dispatch)
 
 	if s.staff and not staff_still_valid(s, ctx):
 		s.draft = None
 		s.resume_state = None
 		return run(s, verify_staff(s, ctx), ctx)
 
-	kw = normalize(inp.get("text")) if inp["type"] == "text" else None
 	drafting = bool(s.draft) and s.state != "resume"
 	if s.draft:  # messages sent while drafting, for on_report_stats
 		s.draft.messages = (s.draft.messages or 0) + 1
@@ -175,6 +188,8 @@ def dispatch(s, inp, ctx):
 
 STATES.update(
 	{
+		"privacy_notice": PrivacyNotice(),
+		"privacy": Privacy(),
 		"welcome": Welcome(),
 		"not_staff": NotStaff(),
 		"lang": Lang(),

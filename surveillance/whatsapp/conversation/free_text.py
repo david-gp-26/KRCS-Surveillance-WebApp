@@ -24,6 +24,7 @@ FREE_FIELDS = [
 	"region", "sub_county", "location_name", "category", "symptoms", "affected_count", "age_group",
 	"animal_exposure", "deaths_count", "onset_date",
 ]  # fmt: skip
+CLINICAL_BOUNDARIES = {"prescription_boundary", "diagnosis_boundary"}  # agents/chatbot safety.py
 
 
 def _clip(value, n):
@@ -69,8 +70,10 @@ def describe(s, value, ctx, x=None):
 		d.reporter_name = s.profile_name[:140]
 	d.followups = missing_steps(s, ctx)
 	urgent = [text(t(s)["urgent"])] if x["threat"] == "high" else []
+	# A report that also asks for a diagnosis or a dose (SRS R75, R76): the report goes on, the demand is not met.
+	boundary = [text(t(s)["clinicalBoundary"])] if x.get("safety") in CLINICAL_BOUNDARIES else []
 	noted = text(t(s)["noted"](noted_list(s, ctx), len(d.followups)))
-	return go(d.followups[0] if d.followups else "r_review", *urgent, noted)
+	return go(d.followups[0] if d.followups else "r_review", *boundary, *urgent, noted)
 
 
 def noted_list(s, ctx):
@@ -119,6 +122,7 @@ def extraction_note(s):
 		line
 		for line in [
 			f"WhatsApp free-text report ({x.extractor}); every value was confirmed by the reporter at review.",
+			d.transcribed and "The message below is an automatic transcript of the attached voice note.",
 			f'Message: "{d.description}"',
 			filled and "Filled in from the message: " + "; ".join(filled),
 			d.followups

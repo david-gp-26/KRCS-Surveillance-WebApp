@@ -15,10 +15,11 @@ from datetime import date, timedelta
 import requests
 
 from surveillance.whatsapp import content as C
+from surveillance.whatsapp.redact import redact
 
 AUTOFILL = 0.7
 FIELDS = [
-	"symptoms", "affected_count", "deaths_count", "category", "sex", "age_group", "animal_exposure",
+	"symptoms", "affected_count", "deaths_count", "category", "age_group", "animal_exposure",
 	"onset_date", "region", "sub_county", "location_name",
 ]  # fmt: skip
 
@@ -195,7 +196,7 @@ def extract_report(value, ctx, today, language=None):
 		try:
 			raw = ctx.extractor.extract(
 				{
-					"text": str(value)[:2000],
+					"text": redact(value)[:2000],
 					"language": language,
 					"today": today,
 					"vocabulary": {
@@ -256,6 +257,7 @@ def _clean(raw, catalog, sub_counties, today):
 		"language": "sw" if raw.get("language") == "sw" else "en",
 		"is_report": bool(raw.get("is_report")),
 		"threat": raw.get("threat") or "routine",
+		"safety": raw.get("safety"),
 		"danger_signs": raw.get("danger_signs") or [],
 		"diseases": [d.get("label") or d.get("key") for d in raw.get("mentioned_diseases") or []],
 		"notes": raw.get("notes") or [],

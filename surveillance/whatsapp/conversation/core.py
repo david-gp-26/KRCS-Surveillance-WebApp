@@ -85,6 +85,8 @@ def new_session(phone):
 		symptom_group=None,
 		question=None,
 		seed=None,  # a report typed outside the report flow: {text, extraction}
+		privacy_version=None,  # the privacy notice this number agreed to
+		held=None,  # the message waiting for that answer: {inp, state, last_active}
 	)
 
 
