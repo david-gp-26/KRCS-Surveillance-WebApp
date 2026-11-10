@@ -46,17 +46,25 @@ from surveillance.whatsapp.messages import text
 def transcribed(s, inp, ctx):
 	"""The words of a voice note (AI/ML §6.3), which then go the way typed words do. None: the reporter is asked to type.
 	The menu language is not sent: someone reading Kiswahili menus may speak English or a mix, and the service picks
-	its model by the language it hears."""
+	its model by the language it hears. The words are kept on the note in the draft, so they are saved on its row and
+	the background transcription for officers skips it."""
 	transcribe = getattr(ctx, "transcribe", None)
 	if inp.get("kind") != "audio" or not transcribe:
 		return None
 	try:
-		words = (transcribe(inp) or "").strip()
+		heard = transcribe(inp) or ""
 	except Exception:
 		if getattr(ctx, "log_error", None):
 			ctx.log_error("WhatsApp voice note could not be transcribed")
 		return None
-	return words if len(normalize(words)) >= 3 else None
+	words, language = (heard.get("text") or "", heard.get("language")) if isinstance(heard, dict) else (heard, None)
+	words = words.strip()
+	if len(normalize(words)) < 3:
+		return None
+	for m in s.draft.media or []:
+		if m.get("media_id") == inp.get("media_id"):
+			m["transcript"], m["transcript_language"] = words, language
+	return words
 
 
 class RDescribe(State):

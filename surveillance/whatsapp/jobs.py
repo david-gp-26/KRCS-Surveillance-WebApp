@@ -78,19 +78,17 @@ def extraction_client(st):
 
 
 def voice_transcriber(st):
-	"""ctx.transcribe when Transcribe Voice Notes is on: POST /transcribe on the extraction or chatbot service.
-	The note also stays on the report, attached as usual, once it is submitted."""
-	url = st.extraction_url or st.chatbot_url
+	"""ctx.transcribe when Transcribe Voice Notes is on: POST /transcribe on the speech service in the site config
+	(`stt_url`, `stt_token`), the one surveillance.transcription uses. The note stays on the report, attached as
+	usual, with this text on its row, so the background job doesn't transcribe it again."""
+	url = frappe.conf.get("stt_url")
 	if not st.voice_transcription or not url:
 		return None
-	token_field = "extraction_token" if st.extraction_url else "chatbot_token"
-	client = TranscriptionClient(
-		url, st.get_password(token_field, raise_exception=False), timeout=cint(st.transcription_timeout) or 45
-	)
+	client = TranscriptionClient(url, frappe.conf.get("stt_token"), timeout=cint(st.transcription_timeout) or 45)
 
 	def transcribe(inp):
 		content, mime = whatsapp_client(st).download_media(inp["media_id"])
-		return client.transcribe(content, mime or inp.get("mime_type"))
+		return client.transcribe(content, mime or inp.get("mime_type"), inp.get("filename"))
 
 	return transcribe
 
@@ -295,6 +293,9 @@ def attach_media(report, media):
 			).insert(ignore_permissions=True)
 			kind = ATTACHMENT_TYPES.get(m.get("kind"), "Attachment")
 			row = {"attachment_type": kind, "file": f.file_url, "text_content": m.get("caption")}
+			if m.get("transcript"):  # read in the conversation: surveillance.transcription skips rows with a status
+				row.update({"transcript": m["transcript"], "transcript_status": "Done",
+					"transcript_language": m.get("transcript_language"), "transcribed_on": frappe.utils.now_datetime()})
 			if m.get("consent"):  # answered in the bot (RConsent)
 				row.update({"people_shown": m.get("people_shown") or 0, "consent": m["consent"],
 					"consent_recorded_on": frappe.utils.now_datetime()})

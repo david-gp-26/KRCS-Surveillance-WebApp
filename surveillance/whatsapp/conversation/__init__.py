@@ -25,7 +25,8 @@ This package does not import frappe: everything it needs comes in through `ctx`
         ctx.now()     epoch seconds
         ctx.chatbot   Response Support Chatbot client, or None
         ctx.extractor free-text extraction client (extract.ExtractionClient), or None for the keyword fallback
-        ctx.transcribe(input) -> text of a voice note, or None (optional); the service detects the spoken language
+        ctx.transcribe(input) -> {"text", "language"} (or the text) of a voice note, or None (optional); the service
+                                 detects the spoken language
         ctx.pseudonym_key  secret for the reference that stands in for a community member's number
         ctx.on_privacy(phone, event, version, language, message_id)   saves an answer to the privacy notice
         ctx.on_submit(report, session, media, extraction), ctx.on_extract(report, session, draft),

@@ -239,7 +239,7 @@
   },
   {
    "default": "0",
-   "description": "Community reports: read a voice note with POST /transcribe on the extraction or chatbot service. Turn on after the service has a speech model and its word error rate is checked on real audio.",
+   "description": "Community reports: read a voice note during the conversation and fill in the report from it, using the speech service in the site config (stt_url, stt_token), the same one that transcribes voice notes for officers. Turn on only after its word error rate is 25% or better on real CHP voice notes (AI/ML spec 7.2).",
    "fieldname": "voice_transcription",
    "fieldtype": "Check",
    "label": "Transcribe Voice Notes"
@@ -282,7 +282,7 @@
  "grid_page_length": 50,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-06 10:00:00.000000",
+ "modified": "2026-11-10 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Surveillance",
  "name": "WhatsApp Settings",

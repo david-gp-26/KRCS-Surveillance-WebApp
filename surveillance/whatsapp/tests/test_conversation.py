@@ -1723,7 +1723,16 @@ class TestVoiceAndSafety(FrappeTestCase):
 		self.assertEqual(h.s.draft.affected_count, 5)
 		self.assertTrue(h.s.draft.transcribed)
 		self.assertEqual(len(h.s.draft.media), 1)
+		self.assertEqual(h.s.draft.media[0]["transcript"], "Watoto watano wanaharisha tangu jana")  # saved on its row
 		self.assertEqual(h.ctx.extractor.calls[0]["text"], "Watoto watano wanaharisha tangu jana")
+
+	def test_the_language_heard_is_kept_with_the_words(self):
+		h = self.harness({"text": "Watoto watano wanaharisha", "language": "sw"})
+		start(h, guided=False)
+		h.send(self.VOICE)
+		self.assertEqual(h.s.draft.description, "Watoto watano wanaharisha")
+		m = h.s.draft.media[0]
+		self.assertEqual((m["transcript"], m["transcript_language"]), ("Watoto watano wanaharisha", "sw"))
 
 	def test_an_unusable_or_failed_transcript_asks_for_typing(self):
 		for words, error in ((None, None), ("", None), ("a", None), (None, ConnectionError("down"))):
@@ -1734,6 +1743,7 @@ class TestVoiceAndSafety(FrappeTestCase):
 			self.assertRegex(h.bodies(), r"could not be read automatically")
 			self.assertEqual(h.s.state, "r_describe")
 			self.assertEqual(len(h.s.draft.media), 1)
+			self.assertFalse(h.s.draft.media[0].get("transcript"))  # left for the background transcription
 
 	def test_a_photo_is_not_sent_for_transcription(self):
 		h = self.harness("words")

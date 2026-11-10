@@ -526,21 +526,52 @@ class TestWhatsAppIntegration(FrappeTestCase):
 		[perm] = meta.permissions
 		self.assertEqual((perm.role, perm.read, perm.write, perm.create, perm.delete), ("System Manager", 1, 0, 0, 0))
 
-	def test_voice_note_setting_downloads_and_transcribes(self):
+	def test_voice_note_setting_uses_the_sites_speech_service(self):
 		settings = frappe.get_doc("WhatsApp Settings")
-		settings.update({"voice_transcription": 1, "chatbot_url": "http://stt.test", "transcription_timeout": 7})
+		settings.update({"voice_transcription": 1, "transcription_timeout": 7})
 		self.wa.files["v1"] = (b"ogg bytes", "audio/ogg")
-		with patch("surveillance.whatsapp.transcribe.requests.post") as post:
-			post.return_value.json.return_value = {"text": "watoto wanaharisha", "usable": True}
-			words = jobs.voice_transcriber(settings)({"media_id": "v1", "mime_type": "audio/ogg"})
-		self.assertEqual(words, "watoto wanaharisha")
-		self.assertEqual(post.call_args.args[0], "http://stt.test/transcribe")
-		self.assertEqual(post.call_args.kwargs["data"], b"ogg bytes")
-		self.assertIsNone(post.call_args.kwargs["params"])  # the service detects the language
-		self.assertEqual(post.call_args.kwargs["headers"]["Content-Type"], "audio/ogg")
-		self.assertEqual(post.call_args.kwargs["timeout"], 7)
-		settings.voice_transcription = 0
-		self.assertIsNone(jobs.voice_transcriber(settings))
+		stt = {"stt_url": "http://stt.test/", "stt_token": "tok"}
+		with patch.dict(frappe.conf, stt), patch("surveillance.whatsapp.transcribe.requests.post") as post:
+			post.return_value.json.return_value = {"text": " watoto wanaharisha ", "language": "sw", "usable": True}
+			heard = jobs.voice_transcriber(settings)({"media_id": "v1", "mime_type": "audio/ogg"})
+			self.assertEqual(heard, {"text": "watoto wanaharisha", "language": "sw"})
+			self.assertEqual(post.call_args.args[0], "http://stt.test/transcribe")
+			# the form upload surveillance.transcription sends too; no language: the service detects it
+			self.assertEqual(post.call_args.kwargs["files"], {"file": ("voice-note", b"ogg bytes", "audio/ogg")})
+			self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer tok")
+			self.assertEqual(post.call_args.kwargs["timeout"], 7)
+
+			post.return_value.json.return_value = {"text": "maneno", "usable": False}
+			self.assertIsNone(jobs.voice_transcriber(settings)({"media_id": "v1"}))
+			post.return_value.json.return_value = {"text": "maneno", "language": "sw"}  # no verdict: trusted
+			self.assertEqual(jobs.voice_transcriber(settings)({"media_id": "v1"})["text"], "maneno")
+
+			settings.voice_transcription = 0
+			self.assertIsNone(jobs.voice_transcriber(settings))
+		settings.voice_transcription = 1
+		with patch.dict(frappe.conf, {"stt_url": None}):
+			self.assertIsNone(jobs.voice_transcriber(settings))  # no speech service on this site
+
+	def test_a_voice_note_read_in_the_conversation_is_not_transcribed_again(self):
+		from surveillance import transcription
+
+		name = data.create_report(self.case_report(STAFF_USER, STAFF_PHONE))["name"]
+		self.wa.files = {"read": (b"OggS read", "audio/ogg"), "unread": (b"OggS unread", "audio/ogg")}
+		media = [
+			{"kind": "audio", "media_id": "read", "mime_type": "audio/ogg", "consent": "No one",
+				"transcript": "Watoto watano wanaharisha", "transcript_language": "sw"},
+			{"kind": "audio", "media_id": "unread", "mime_type": "audio/ogg", "consent": "No one"},
+		]
+		with patch.dict(frappe.conf, {"stt_url": "http://stt.test", "stt_token": "tok"}), patch.object(
+			transcription, "_queue"
+		) as queued:
+			jobs.after_submit(name, media, PHONE, lang="sw")
+		read, unread = frappe.get_doc("Case Report", name).attachments[:2]
+		self.assertEqual((read.attachment_type, read.transcript, read.transcript_status, read.transcript_language),
+			("Voice Note", "Watoto watano wanaharisha", "Done", "sw"))
+		self.assertTrue(read.transcribed_on)
+		self.assertFalse(unread.transcript)
+		self.assertEqual([c.args[0] for c in queued.call_args_list], [unread.name])  # officers still get its text
 
 	def test_community_member_is_a_pseudonym_to_the_ai_services_and_logs(self):
 		ctx = jobs.make_context(frappe.get_doc("WhatsApp Settings"))
